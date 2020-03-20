@@ -16,22 +16,35 @@ class Normalize(object):
     '''
         Normalize the tensors
     '''
-    def __call__(self, rgb_img, label_img=None):
+    def __call__(self, rgb_img, label_img=None, depth_img=None):
         rgb_img = F.to_tensor(rgb_img) # convert to tensor (values between 0 and 1)
         rgb_img = F.normalize(rgb_img, MEAN, STD) # normalize the tensor
         label_img = torch.LongTensor(np.array(label_img).astype(np.int64))
-        return rgb_img, label_img
+
+        if depth_img is not None:
+            depth_img = F.to_tensor(depth_img) # convert to tensor (values between 0 and 1)
+#            depth_img = F.normalize(depth_img, MEAN[0], STD[0]) # normalize the tensor
+
+            return rgb_img, label_img, depth_img
+        else:
+            return rgb_img, label_img
 
 
 class RandomFlip(object):
     '''
         Random Flipping
     '''
-    def __call__(self, rgb_img, label_img):
+    def __call__(self, rgb_img, label_img, depth_img=None):
         if random.random() < 0.5:
             rgb_img = rgb_img.transpose(Image.FLIP_LEFT_RIGHT)
             label_img = label_img.transpose(Image.FLIP_LEFT_RIGHT)
-        return rgb_img, label_img
+            if depth_img is not None:
+                depth_img = depth_img.transpose(Image.FLIP_LEFT_RIGHT)
+
+        if depth_img is not None:
+            return rgb_img, label_img, depth_img
+        else:
+            return rgb_img, label_img
 
 
 class RandomScale(object):
@@ -44,14 +57,19 @@ class RandomScale(object):
         else:
             self.scale = (scale, scale)
 
-    def __call__(self, rgb_img, label_img):
+    def __call__(self, rgb_img, label_img, depth_img=None):
         w, h = rgb_img.size
         rand_log_scale = math.log(self.scale[0], 2) + random.random() * (math.log(self.scale[1], 2) - math.log(self.scale[0], 2))
         random_scale = math.pow(2, rand_log_scale)
         new_size = (int(round(w * random_scale)), int(round(h * random_scale)))
         rgb_img = rgb_img.resize(new_size, Image.ANTIALIAS)
         label_img = label_img.resize(new_size, Image.NEAREST)
-        return rgb_img, label_img
+
+        if depth_img is not None:
+            depth_img = depth_img.resize(new_size, Image.BILINEAR)
+            return rgb_img, label_img, depth_img
+        else:
+            return rgb_img, label_img
 
 
 class RandomCrop(object):
@@ -75,18 +93,26 @@ class RandomCrop(object):
         j = random.randint(0, w - tw)
         return i, j, th, tw
 
-    def __call__(self, rgb_img, label_img):
+    def __call__(self, rgb_img, label_img, depth_img=None):
         w, h = rgb_img.size
         pad_along_w = max(0, int((1 + self.crop_size[0] - w) / 2))
         pad_along_h = max(0, int((1 + self.crop_size[1] - h) / 2))
         # padd the images
         rgb_img = Pad(padding=(pad_along_w, pad_along_h), fill=0, padding_mode='constant')(rgb_img)
         label_img = Pad(padding=(pad_along_w, pad_along_h), fill=self.ignore_idx, padding_mode='constant')(label_img)
+        if depth_img is not None:
+            depth_img = Pad(padding=(pad_along_w, pad_along_h), fill=0, padding_mode='constant')(depth_img)
 
         i, j, h, w = self.get_params(rgb_img, self.crop_size)
         rgb_img = F.crop(rgb_img, i, j, h, w)
         label_img = F.crop(label_img, i, j, h, w)
-        return rgb_img, label_img
+        if depth_img is not None:
+            depth_img = F.crop(depth_img, i, j, h, w)
+
+        if depth_img is not None:
+            return rgb_img, label_img, depth_img
+        else:
+            return rgb_img, label_img
 
 
 class RandomResizedCrop(object):
@@ -116,7 +142,7 @@ class RandomResizedCrop(object):
         j = random.randint(0, w - tw)
         return i, j, th, tw
 
-    def __call__(self, rgb_img, label_img):
+    def __call__(self, rgb_img, label_img, depth_img=None):
         w, h = rgb_img.size
 
         rand_log_scale = math.log(self.scale[0], 2) + random.random() * (
@@ -127,11 +153,16 @@ class RandomResizedCrop(object):
         i, j, h, w = self.get_params(rgb_img, crop_size)
         rgb_img = F.crop(rgb_img, i, j, h, w)
         label_img = F.crop(label_img, i, j, h, w)
+        depth_img = F.crop(depth_img, i, j, h, w)
 
         rgb_img = rgb_img.resize(self.size, Image.ANTIALIAS)
         label_img = label_img.resize(self.size, Image.NEAREST)
+        depth_img = depth_img.resize(self.size, Image.BILINEAR)
 
-        return rgb_img, label_img
+        if depth_img is not None:
+            return rgb_img, label_img, depth_img
+        else:
+            return rgb_img, label_img
 
 
 class Resize(object):
@@ -144,11 +175,16 @@ class Resize(object):
         else:
             self.size = (size, size)
 
-    def __call__(self, rgb_img, label_img):
+    def __call__(self, rgb_img, label_img, depth_img=None):
         rgb_img = rgb_img.resize(self.size, Image.BILINEAR)
         label_img = label_img.resize(self.size, Image.NEAREST)
-        return rgb_img, label_img
+        if depth_img is not None:
+            depth_img = depth_img.resize(self.size, Image.BILINEAR)
 
+        if depth_img is not None:
+            return rgb_img, label_img, depth_img
+        else:
+            return rgb_img, label_img
 
 class Compose(object):
     """Composes several transforms together.

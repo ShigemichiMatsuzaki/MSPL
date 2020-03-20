@@ -30,8 +30,10 @@ class CityscapesSegmentation(data.Dataset):
         with open(data_file, 'r') as lines:
             for line in lines:
                 line_split = line.split(',')
-                rgb_img_loc = root + os.sep + line_split[0].rstrip()
-                label_img_loc = root + os.sep + line_split[1].rstrip()
+#                rgb_img_loc = root + os.sep + line_split[0].rstrip()
+                rgb_img_loc = line_split[0].rstrip()
+#                rgb_img_loc = root + os.sep + line_split[1].rstrip()
+                label_img_loc = line_split[1].rstrip()
                 assert os.path.isfile(rgb_img_loc)
                 assert os.path.isfile(label_img_loc)
                 self.images.append(rgb_img_loc)

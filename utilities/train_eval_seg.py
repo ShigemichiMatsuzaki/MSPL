@@ -10,7 +10,7 @@ from utilities.metrics.segmentation_miou import MIOU
 from utilities.print_utils import *
 from torch.nn.parallel import gather
 
-def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, device='cuda'):
+def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, device='cuda', use_depth=False):
     losses = AverageMeter()
     batch_time = AverageMeter()
     inter_meter = AverageMeter()
@@ -20,11 +20,15 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
 
     miou_class = MIOU(num_classes=num_classes)
 
-    for i, (inputs, target) in enumerate(dataset_loader):
-        inputs = inputs.to(device=device)
-        target = target.to(device=device)
+    for i, batch in enumerate(dataset_loader):
+        inputs = batch[0].to(device=device)
+        target = batch[1].to(device=device)
 
-        outputs = model(inputs)
+        if use_depth:
+            depth = batch[2].to(device=device)
+            outputs = model(inputs, depth)
+        else:
+            outputs = model(inputs)
 
         if device == 'cuda':
             loss = criterion(outputs, target).mean()
@@ -60,7 +64,7 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
     return miou, losses.avg
 
 
-def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda'):
+def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda', use_depth=False):
     model.eval()
     inter_meter = AverageMeter()
     union_meter = AverageMeter()
@@ -73,10 +77,15 @@ def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda'
         losses = AverageMeter()
 
     with torch.no_grad():
-        for i, (inputs, target) in enumerate(dataset_loader):
-            inputs = inputs.to(device=device)
-            target = target.to(device=device)
-            outputs = model(inputs)
+        for i, batch in enumerate(dataset_loader):
+            inputs = batch[0].to(device=device)
+            target = batch[1].to(device=device)
+            
+            if use_depth:
+                depth = batch[2].to(device=device)
+                outputs = model(inputs, depth)
+            else:
+                outputs = model(inputs)
 
             if criterion:
                 if device == 'cuda':

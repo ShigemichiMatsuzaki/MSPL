@@ -1,0 +1,11 @@
+CUDA_VISIBLE_DEVICES=1 python train_segmentation.py \
+  --dataset city \
+  --data-path ./vision_datasets/cityscapes/ \
+  --batch-size 25 \
+  --crop-size 512 256 \
+  --model espnetv2 \
+  --s 2.0 \
+  --lr 0.009 \
+  --scheduler hybrid \
+  --clr-max 61 \
+  --epochs 100

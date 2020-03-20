@@ -12,7 +12,8 @@ import torch.optim as optim
 from utilities.utils import save_checkpoint, model_parameters, compute_flops
 from utilities.train_eval_seg import train_seg as train
 from utilities.train_eval_seg import val_seg as val
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
+from tensorboardX import SummaryWriter
 from loss_fns.segmentation_loss import SegmentationLoss
 import random
 import math
@@ -28,6 +29,9 @@ def main(args):
                                                                                            args.batch_size))
     if not os.path.isdir(args.savedir):
         os.makedirs(args.savedir)
+
+    num_gpus = torch.cuda.device_count()
+    device = 'cuda' if num_gpus > 0 else 'cpu'
 
     if args.dataset == 'pascal':
         from data_loader.segmentation.voc import VOCSegmentation, VOC_CLASS_LIST
@@ -64,6 +68,17 @@ def main(args):
         class_wts[17] = 10.405355453491
         class_wts[18] = 10.138095855713
         class_wts[19] = 0.0
+
+    elif args.dataset == 'greenhouse':
+        print(args.use_depth)
+        from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
+        train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='train_greenhouse_gt.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+        val_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='val_greenhouse.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+        class_weights = np.load('class_weights.npy')[:4]
+        print(class_weights)
+        class_wts = torch.from_numpy(class_weights).float().to(device)
+
+        seg_classes = len(GREENHOUSE_CLASS_LIST)
     else:
         print_error_message('Dataset: {} not yet supported'.format(args.dataset))
         exit(-1)
@@ -75,6 +90,10 @@ def main(args):
         from model.segmentation.espnetv2 import espnetv2_seg
         args.classes = seg_classes
         model = espnetv2_seg(args)
+    elif args.model == 'espdnet':
+        from model.segmentation.espdnet import espdnet_seg
+        args.classes = seg_classes
+        model = espdnet_seg(args)
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
         model = dicenet_seg(args, classes=seg_classes)
@@ -99,11 +118,10 @@ def main(args):
                 m.weight.requires_grad = False
                 m.bias.requires_grad = False
 
-    num_gpus = torch.cuda.device_count()
-    device = 'cuda' if num_gpus > 0 else 'cpu'
 
     train_params = [{'params': model.get_basenet_params(), 'lr': args.lr},
-                    {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult}]
+                    {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult},
+                    {'params': model.get_depth_encoder_params(), 'lr': args.lr * args.lr_mult}]
 
     optimizer = optim.SGD(train_params, momentum=args.momentum, weight_decay=args.weight_decay)
 
@@ -132,6 +150,8 @@ def main(args):
                                .format(args.resume, checkpoint['epoch']))
         else:
             print_warning_message("=> no checkpoint found at '{}'".format(args.resume))
+
+    print('device : ' + device)
 
     #criterion = nn.CrossEntropyLoss(weight=class_wts, reduction='none', ignore_index=args.ignore_idx)
     criterion = SegmentationLoss(n_classes=seg_classes, loss_type=args.loss_type,
@@ -207,8 +227,8 @@ def main(args):
 
         print_info_message(
             'Running epoch {} with learning rates: base_net {:.6f}, segment_net {:.6f}'.format(epoch, lr_base, lr_seg))
-        miou_train, train_loss = train(model, train_loader, optimizer, criterion, seg_classes, epoch, device=device)
-        miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device)
+        miou_train, train_loss = train(model, train_loader, optimizer, criterion, seg_classes, epoch, device=device, use_depth=args.use_depth)
+        miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device, use_depth=args.use_depth)
 
         # remember best miou and save checkpoint
         is_best = miou_val > best_miou
@@ -289,6 +309,7 @@ if __name__ == "__main__":
     parser.add_argument('--finetune', default='', type=str, help='Finetune the segmentation model')
     parser.add_argument('--model-width', default=224, type=int, help='Model width')
     parser.add_argument('--model-height', default=224, type=int, help='Model height')
+    parser.add_argument('--use-depth', default=False, type=bool, help='Use depth')
 
     args = parser.parse_args()
 
@@ -307,15 +328,22 @@ if __name__ == "__main__":
         else:
             print_error_message('Select image size from 512x256, 1024x512, 2048x1024')
         print_log_message('Using scale = ({}, {})'.format(args.scale[0], args.scale[1]))
+    elif args.dataset == 'greenhouse':
+        args.scale = (0.5, 2.0)
     else:
         print_error_message('{} dataset not yet supported'.format(args.dataset))
 
     if not args.finetune:
         from model.weight_locations.classification import model_weight_map
 
-        weight_file_key = '{}_{}'.format(args.model, args.s)
-        assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)
-        args.weights = model_weight_map[weight_file_key]
+        if args.model == 'espdnet':
+            weight_file_key = '{}_{}'.format('espnetv2', args.s)
+            assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)
+            args.weights = model_weight_map[weight_file_key]
+        else:
+            weight_file_key = '{}_{}'.format(args.model, args.s)
+            assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)
+            args.weights = model_weight_map[weight_file_key]
     else:
         args.weights = ''
         assert os.path.isfile(args.finetune), '{} weight file does not exist'.format(args.finetune)

@@ -30,7 +30,9 @@ class MIOU(object):
         target += 1
 
         pred = pred * (target > 0)
+        # pred = pred * (target < self.num_classes)
         inter = pred * (pred == target)
+        # inter = pred * (target < self.num_classes)
         area_inter = torch.histc(inter.float(), bins=self.num_classes, min=1, max=self.num_classes)
         area_pred = torch.histc(pred.float(), bins=self.num_classes, min=1, max=self.num_classes)
         area_mask = torch.histc(target.float(), bins=self.num_classes, min=1, max=self.num_classes)

@@ -8,14 +8,15 @@ from torch.nn import init
 from nn_layers.espnet_utils import *
 from nn_layers.efficient_pyramid_pool import EfficientPyrPool
 from nn_layers.efficient_pt import EfficientPWConv
+from nn_layers.espnet_utils import C, CBR
 from model.classification.espnetv2 import EESPNet
 from utilities.print_utils import *
 from torch.nn import functional as F
 
 
-class ESPNetv2Segmentation(nn.Module):
+class ESPDNetSegmentation(nn.Module):
     '''
-    This class defines the ESPNetv2 architecture for the Semantic Segmenation
+    This class defines the ESPDNet architecture for the Semantic Segmenation
     '''
 
     def __init__(self, args, classes=21, dataset='pascal'):
@@ -24,11 +25,55 @@ class ESPNetv2Segmentation(nn.Module):
         # =============================================================
         #                       BASE NETWORK
         # =============================================================
+        #
+        # RGB
+        #
         self.base_net = EESPNet(args) #imagenet model
         del self.base_net.classifier
         del self.base_net.level5
         del self.base_net.level5_0
         config = self.base_net.config
+
+        #
+        # Depth
+        #
+
+        # Layer 1
+        self.depth_encoder_level1 = nn.Sequential(
+                                            CBR(nIn=1, nOut=32, kSize=3, stride=2), # Input: 3, Ouput: 16, kernel: 3
+                                            CBR(nIn=32, nOut=32, kSize=3), # Input: 3, Ouput: 16, kernel: 3
+                                      )
+
+        # Level 2
+        self.depth_encoder_level2 = nn.Sequential(
+#                                            C(nIn=32, nOut=128, kSize=1), # Pixel-wise conv
+#                                            CBR(nIn=128, nOut=128, kSize=3, stride=2, groups=128) # Depth-wise conv
+                                            CBR(nIn=32, nOut=128, kSize=3, stride=2),  # Downsample
+                                            CBR(nIn=128, nOut=128, kSize=3),
+                                            CBR(nIn=128, nOut=128, kSize=3) 
+                                      )
+
+        # Level 3
+        self.depth_encoder_level3 = nn.Sequential(
+#                                            C(nIn=128, nOut=256, kSize=1), # Pixel-wise conv
+#                                            CBR(nIn=256, nOut=256, kSize=3, groups=256)             # Depth-wise conv
+                                            CBR(nIn=128, nOut=256, kSize=3, stride=2),
+                                            CBR(nIn=256, nOut=256, kSize=3),
+                                            CBR(nIn=256, nOut=256, kSize=3),
+                                            CBR(nIn=256, nOut=256, kSize=3)
+                                             
+                                      )
+
+        # Level 4
+        self.depth_encoder_level4 = nn.Sequential(
+                                            CBR(nIn=256, nOut=512, kSize=3, stride=2), # Pixel-wise conv
+                                            CBR(nIn=512, nOut=512, kSize=3),
+                                            CBR(nIn=512, nOut=512, kSize=3),
+                                            CBR(nIn=512, nOut=512, kSize=3)
+                                      )
+
+
+          # 112 L1
 
         #=============================================================
         #                   SEGMENTATION NETWORK
@@ -99,6 +144,15 @@ class ESPNetv2Segmentation(nn.Module):
                         if p.requires_grad:
                             yield p
 
+    def get_depth_encoder_params(self):
+        modules_depth = [self.depth_encoder_level1, self.depth_encoder_level2, self.depth_encoder_level3, self.depth_encoder_level4]
+        for i in range(len(modules_depth)):
+            for m in modules_depth[i].named_modules():
+                if isinstance(m[1], nn.Conv2d) or isinstance(m[1], nn.BatchNorm2d) or isinstance(m[1], nn.PReLU):
+                    for p in m[1].parameters():
+                        if p.requires_grad:
+                            yield p
+
     def get_segment_params(self):
         modules_seg = [self.bu_dec_l1, self.bu_dec_l2, self.bu_dec_l3, self.bu_dec_l4,
                        self.merge_enc_dec_l4, self.merge_enc_dec_l3, self.merge_enc_dec_l2,
@@ -110,32 +164,81 @@ class ESPNetv2Segmentation(nn.Module):
                         if p.requires_grad:
                             yield p
 
-    def forward(self, x):
+    def forward(self, x, x_d=None):
         '''
         :param x: Receives the input RGB image
+        :param x_d: Receives the input Depth image
         :return: a C-dimensional vector, C=# of classes
         '''
-        x_size = (x.size(2), x.size(3))
+
+        x_size = (x.size(2), x.size(3)) # Width and height
+
+        # 
+        # First conv
+        #
         enc_out_l1 = self.base_net.level1(x)  # 112
         if not self.base_net.input_reinforcement:
             del x
             x = None
 
-        enc_out_l2 = self.base_net.level2_0(enc_out_l1, x)  # 56
+        if x_d is not None:
+            d_enc_out_l1 = self.depth_encoder_level1(x_d) # Depth
+    
+            # Fusion level 1
+            enc_out_l1 += d_enc_out_l1
 
-        enc_out_l3_0 = self.base_net.level3_0(enc_out_l2, x)  # down-sample
+        # 
+        # Second layer (Strided EESP)
+        #
+        enc_out_l2 = self.base_net.level2_0(enc_out_l1, x)  # 56
+        if x_d is not None:
+            d_enc_out_l2 = self.depth_encoder_level2(d_enc_out_l1)
+    
+            # Fusion level 2
+            enc_out_l2 += d_enc_out_l2
+
+        # 
+        # Third layer 1 (Strided EESP)
+        #
+        enc_out_l3_0 = self.base_net.level3_0(enc_out_l2, x)  # down-sample -> 28
+        # 
+        # EESP
+        #
         for i, layer in enumerate(self.base_net.level3):
             if i == 0:
                 enc_out_l3 = layer(enc_out_l3_0)
             else:
                 enc_out_l3 = layer(enc_out_l3)
 
-        enc_out_l4_0 = self.base_net.level4_0(enc_out_l3, x)  # down-sample
+        if x_d is not None:
+            d_enc_out_l3 = self.depth_encoder_level3(d_enc_out_l2) # Depth
+            # d_enc_out_l3 = self.depth_encoder_level3_1(d_enc_out_l3) # Depth
+    
+            # Fusion level 3
+            enc_out_l3 += d_enc_out_l3
+
+        # 
+        # Forth layer 1 (Strided EESP)
+        #
+        enc_out_l4_0 = self.base_net.level4_0(enc_out_l3, x)  # down-sample -> 14
+        # 
+        # EESP
+        #
         for i, layer in enumerate(self.base_net.level4):
             if i == 0:
                 enc_out_l4 = layer(enc_out_l4_0)
             else:
                 enc_out_l4 = layer(enc_out_l4)
+
+        if x_d is not None:
+            d_enc_out_l4 = self.depth_encoder_level4(d_enc_out_l3) # Depth
+            # d_enc_out_l4 = self.depth_encoder_level4_1(d_enc_out_l4) # Depth
+    
+            # Fusion level 3
+            enc_out_l4 += d_enc_out_l4
+
+
+        # *** 5th layer is for and classification and removed for segmentation ***
 
         # bottom-up decoding
         bu_out = self.bu_dec_l1(enc_out_l4)
@@ -164,12 +267,12 @@ class ESPNetv2Segmentation(nn.Module):
         return F.interpolate(bu_out, size=x_size, mode='bilinear', align_corners=True)
 
 
-def espnetv2_seg(args):
+def espdnet_seg(args):
     classes = args.classes
     scale=args.s
     weights = args.weights
     dataset=args.dataset
-    model = ESPNetv2Segmentation(args, classes=classes, dataset=dataset)
+    model = ESPDNetSegmentation(args, classes=classes, dataset=dataset)
     if weights:
         import os
         if os.path.isfile(weights):
@@ -209,7 +312,7 @@ if __name__ == "__main__":
     args.dataset='pascal'
 
     input = torch.Tensor(1, 3, 384, 384)
-    model = espnetv2_seg(args)
+    model = espdnet_seg(args)
     from utilities.utils import compute_flops, model_parameters
     print_info_message(compute_flops(model, input=input))
     print_info_message(model_parameters(model))
