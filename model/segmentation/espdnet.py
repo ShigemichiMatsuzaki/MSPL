@@ -19,7 +19,7 @@ class ESPDNetSegmentation(nn.Module):
     This class defines the ESPDNet architecture for the Semantic Segmenation
     '''
 
-    def __init__(self, args, classes=21, dataset='pascal'):
+    def __init__(self, args, classes=21, dataset='pascal', dense_fuse=False):
         super().__init__()
 
         # =============================================================
@@ -37,40 +37,46 @@ class ESPDNetSegmentation(nn.Module):
         #
         # Depth
         #
+        args.channels = 1
+        self.depth_base_net = EESPNet(args)
+        del self.depth_base_net.classifier
+        del self.depth_base_net.level5
+        del self.depth_base_net.level5_0
+        config = self.depth_base_net.config
 
         # Layer 1
-        self.depth_encoder_level1 = nn.Sequential(
-                                            CBR(nIn=1, nOut=32, kSize=3, stride=2), # Input: 3, Ouput: 16, kernel: 3
-                                            CBR(nIn=32, nOut=32, kSize=3), # Input: 3, Ouput: 16, kernel: 3
-                                      )
-
-        # Level 2
-        self.depth_encoder_level2 = nn.Sequential(
-#                                            C(nIn=32, nOut=128, kSize=1), # Pixel-wise conv
-#                                            CBR(nIn=128, nOut=128, kSize=3, stride=2, groups=128) # Depth-wise conv
-                                            CBR(nIn=32, nOut=128, kSize=3, stride=2),  # Downsample
-                                            CBR(nIn=128, nOut=128, kSize=3),
-                                            CBR(nIn=128, nOut=128, kSize=3) 
-                                      )
-
-        # Level 3
-        self.depth_encoder_level3 = nn.Sequential(
-#                                            C(nIn=128, nOut=256, kSize=1), # Pixel-wise conv
-#                                            CBR(nIn=256, nOut=256, kSize=3, groups=256)             # Depth-wise conv
-                                            CBR(nIn=128, nOut=256, kSize=3, stride=2),
-                                            CBR(nIn=256, nOut=256, kSize=3),
-                                            CBR(nIn=256, nOut=256, kSize=3),
-                                            CBR(nIn=256, nOut=256, kSize=3)
-                                             
-                                      )
-
-        # Level 4
-        self.depth_encoder_level4 = nn.Sequential(
-                                            CBR(nIn=256, nOut=512, kSize=3, stride=2), # Pixel-wise conv
-                                            CBR(nIn=512, nOut=512, kSize=3),
-                                            CBR(nIn=512, nOut=512, kSize=3),
-                                            CBR(nIn=512, nOut=512, kSize=3)
-                                      )
+#        self.depth_encoder_level1 = nn.Sequential(
+#                                            CBR(nIn=1, nOut=32, kSize=3, stride=2), # Input: 3, Ouput: 16, kernel: 3
+#                                            CBR(nIn=32, nOut=32, kSize=3), # Input: 3, Ouput: 16, kernel: 3
+#                                      )
+#
+#        # Level 2
+#        self.depth_encoder_level2 = nn.Sequential(
+##                                            C(nIn=32, nOut=128, kSize=1), # Pixel-wise conv
+##                                            CBR(nIn=128, nOut=128, kSize=3, stride=2, groups=128) # Depth-wise conv
+#                                            CBR(nIn=32, nOut=128, kSize=3, stride=2),  # Downsample
+#                                            CBR(nIn=128, nOut=128, kSize=3),
+#                                            CBR(nIn=128, nOut=128, kSize=3) 
+#                                      )
+#
+#        # Level 3
+#        self.depth_encoder_level3 = nn.Sequential(
+##                                            C(nIn=128, nOut=256, kSize=1), # Pixel-wise conv
+##                                            CBR(nIn=256, nOut=256, kSize=3, groups=256)             # Depth-wise conv
+#                                            CBR(nIn=128, nOut=256, kSize=3, stride=2),
+#                                            CBR(nIn=256, nOut=256, kSize=3),
+#                                            CBR(nIn=256, nOut=256, kSize=3),
+#                                            CBR(nIn=256, nOut=256, kSize=3)
+#                                             
+#                                      )
+#
+#        # Level 4
+#        self.depth_encoder_level4 = nn.Sequential(
+#                                            CBR(nIn=256, nOut=512, kSize=3, stride=2), # Pixel-wise conv
+#                                            CBR(nIn=512, nOut=512, kSize=3),
+#                                            CBR(nIn=512, nOut=512, kSize=3),
+#                                            CBR(nIn=512, nOut=512, kSize=3)
+#                                      )
 
 
           # 112 L1
@@ -114,6 +120,7 @@ class ESPDNetSegmentation(nn.Module):
         #self.upsample =  nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
         self.init_params()
+        self.dense_fuse = dense_fuse
 
     def upsample(self, x):
         return F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
@@ -145,7 +152,7 @@ class ESPDNetSegmentation(nn.Module):
                             yield p
 
     def get_depth_encoder_params(self):
-        modules_depth = [self.depth_encoder_level1, self.depth_encoder_level2, self.depth_encoder_level3, self.depth_encoder_level4]
+        modules_depth = [self.depth_base_net]
         for i in range(len(modules_depth)):
             for m in modules_depth[i].named_modules():
                 if isinstance(m[1], nn.Conv2d) or isinstance(m[1], nn.BatchNorm2d) or isinstance(m[1], nn.PReLU):
@@ -182,7 +189,7 @@ class ESPDNetSegmentation(nn.Module):
             x = None
 
         if x_d is not None:
-            d_enc_out_l1 = self.depth_encoder_level1(x_d) # Depth
+            d_enc_out_l1 = self.depth_base_net.level1(x_d) # Depth
     
             # Fusion level 1
             enc_out_l1 += d_enc_out_l1
@@ -192,7 +199,7 @@ class ESPDNetSegmentation(nn.Module):
         #
         enc_out_l2 = self.base_net.level2_0(enc_out_l1, x)  # 56
         if x_d is not None:
-            d_enc_out_l2 = self.depth_encoder_level2(d_enc_out_l1)
+            d_enc_out_l2 = self.depth_base_net.level2_0(d_enc_out_l1)
     
             # Fusion level 2
             enc_out_l2 += d_enc_out_l2
@@ -201,19 +208,26 @@ class ESPDNetSegmentation(nn.Module):
         # Third layer 1 (Strided EESP)
         #
         enc_out_l3_0 = self.base_net.level3_0(enc_out_l2, x)  # down-sample -> 28
+        if x_d is not None: 
+            d_enc_out_l3_0 = self.depth_base_net.level3_0(d_enc_out_l2)  # down-sample -> 28
         # 
         # EESP
         #
-        for i, layer in enumerate(self.base_net.level3):
+        for i, (layer, dlayer) in enumerate(zip(self.base_net.level3, self.depth_base_net.level3)):
             if i == 0:
                 enc_out_l3 = layer(enc_out_l3_0)
+                if x_d is not None: 
+                    d_enc_out_l3 = dlayer(d_enc_out_l3_0)
+                    if self.dense_fuse:
+                        enc_out_l3 += d_enc_out_l3
             else:
-                enc_out_l3 = layer(enc_out_l3)
+                enc_out_l3 = dlayer(enc_out_l3)
+                if x_d is not None: 
+                    d_enc_out_l3 = dlayer(d_enc_out_l3)
+                    if self.dense_fuse:
+                        enc_out_l3 += d_enc_out_l3
 
-        if x_d is not None:
-            d_enc_out_l3 = self.depth_encoder_level3(d_enc_out_l2) # Depth
-            # d_enc_out_l3 = self.depth_encoder_level3_1(d_enc_out_l3) # Depth
-    
+        if x_d is not None and not self.dense_fuse:
             # Fusion level 3
             enc_out_l3 += d_enc_out_l3
 
@@ -221,20 +235,27 @@ class ESPDNetSegmentation(nn.Module):
         # Forth layer 1 (Strided EESP)
         #
         enc_out_l4_0 = self.base_net.level4_0(enc_out_l3, x)  # down-sample -> 14
+        if x_d is not None: 
+            d_enc_out_l4_0 = self.depth_base_net.level4_0(d_enc_out_l3)  # down-sample -> 14
         # 
         # EESP
         #
-        for i, layer in enumerate(self.base_net.level4):
+        for i, (layer, dlayer) in enumerate(zip(self.base_net.level4, self.depth_base_net.level4)):
             if i == 0:
                 enc_out_l4 = layer(enc_out_l4_0)
+                if x_d is not None: 
+                    d_enc_out_l4 = dlayer(d_enc_out_l4_0)
+                    if self.dense_fuse:
+                        enc_out_l4 += d_enc_out_l4
             else:
                 enc_out_l4 = layer(enc_out_l4)
+                if x_d is not None: 
+                    d_enc_out_l4 = dlayer(d_enc_out_l4)
+                    if self.dense_fuse:
+                        enc_out_l4 += d_enc_out_l4
 
-        if x_d is not None:
-            d_enc_out_l4 = self.depth_encoder_level4(d_enc_out_l3) # Depth
-            # d_enc_out_l4 = self.depth_encoder_level4_1(d_enc_out_l4) # Depth
-    
-            # Fusion level 3
+        if x_d is not None and not self.dense_fuse:
+            # Fusion level 4
             enc_out_l4 += d_enc_out_l4
 
 
@@ -283,6 +304,7 @@ def espdnet_seg(args):
             print_error_message('Weight file does not exist at {}. Please check. Exiting!!'.format(weights))
             exit()
         print_info_message('Loading pretrained basenet model weights')
+        # Load pretrained weights for RGB
         basenet_dict = model.base_net.state_dict()
         model_dict = model.state_dict()
         overlap_dict = {k: v for k, v in pretrained_dict.items() if k in basenet_dict}
@@ -293,6 +315,22 @@ def espdnet_seg(args):
         basenet_dict.update(overlap_dict)
         model.base_net.load_state_dict(basenet_dict)
         print_info_message('Pretrained basenet model loaded!!')
+
+        # Load pretrained weights for RGB
+        dbasenet_dict = model.depth_base_net.state_dict()
+        # overlap_dict = {k: v for k, v in pretrained_dict.items() if k in dbasenet_dict and k != 'level1.conv.weight'}
+        overlap_dict = {k: v for k, v in pretrained_dict.items() if k in dbasenet_dict}
+        print(overlap_dict['level1.conv.weight'].size())
+        overlap_dict['level1.conv.weight'] = torch.mean(overlap_dict['level1.conv.weight'], dim=1, keepdim=True)
+        print(overlap_dict['level1.conv.weight'].size())
+        # print(overlap_dict.keys())
+        # exit()
+        if len(overlap_dict) == 0:
+            print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
+            exit()
+        dbasenet_dict.update(overlap_dict)
+        model.depth_base_net.load_state_dict(dbasenet_dict)
+        print_info_message('Pretrained depth basenet model loaded!!')
     else:
         print_warning_message('Training from scratch!!')
     return model
