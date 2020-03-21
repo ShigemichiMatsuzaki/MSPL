@@ -51,7 +51,10 @@ class EESPNet(nn.Module):
         K = [config_all.branches]*len(recept_limit) # No. of parallel branches at different level
 
         # True for the shortcut connection with input
-        self.input_reinforcement = config_all.input_reinforcement
+        if hasattr(args, 'input_reinforcement'):
+            self.input_reinforcement = args.input_reinforcement
+        else:
+            self.input_reinforcement = config_all.input_reinforcement
 
         assert len(K) == len(recept_limit), 'Length of branching factor array and receptive field array should be the same.'
 

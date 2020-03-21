@@ -1,10 +1,10 @@
-CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
+CUDA_VISIBLE_DEVICES=1 python train_depth_ae.py \
   --dataset greenhouse \
   --data-path ./vision_datasets/greenhouse/ \
-  --batch-size 20 \
+  --batch-size 50 \
   --crop-size 480 256 \
   --ignore-idx 4 \
-  --model espdnet \
+  --model espnetv2 \
   --s 2.0 \
   --lr 0.009 \
   --scheduler hybrid \

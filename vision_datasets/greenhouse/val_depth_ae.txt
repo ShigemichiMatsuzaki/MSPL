@@ -1,0 +1,10 @@
+/tmp/dataset/greenhouse/val/26_0_000755.png,/tmp/dataset/greenhouse/valannot/trav_gt/26_0_000755.png,/tmp/dataset/greenhouse/valdepth/26_0_000755.png
+/tmp/dataset/greenhouse/val/26_0_000755_flip.png,/tmp/dataset/greenhouse/valannot/trav_gt/26_0_000755_flip.png,/tmp/dataset/greenhouse/valdepth/26_0_000755_flip.png
+/tmp/dataset/greenhouse/val/26_1_000556.png,/tmp/dataset/greenhouse/valannot/trav_gt/26_1_000556.png,/tmp/dataset/greenhouse/valdepth/26_1_000556.png
+/tmp/dataset/greenhouse/val/26_1_000556_flip.png,/tmp/dataset/greenhouse/valannot/trav_gt/26_1_000556_flip.png,/tmp/dataset/greenhouse/valdepth/26_1_000556_flip.png
+/tmp/dataset/greenhouse/val/26_3_000151.png,/tmp/dataset/greenhouse/valannot/trav_gt/26_3_000151.png,/tmp/dataset/greenhouse/valdepth/26_3_000151.png
+/tmp/dataset/greenhouse/val/26_3_000151_flip.png,/tmp/dataset/greenhouse/valannot/trav_gt/26_3_000151_flip.png,/tmp/dataset/greenhouse/valdepth/26_3_000151_flip.png
+/tmp/dataset/greenhouse/val/26_4_000176.png,/tmp/dataset/greenhouse/valannot/trav_gt/26_4_000176.png,/tmp/dataset/greenhouse/valdepth/26_4_000176.png
+/tmp/dataset/greenhouse/val/26_4_000176_flip.png,/tmp/dataset/greenhouse/valannot/trav_gt/26_4_000176_flip.png,/tmp/dataset/greenhouse/valdepth/26_4_000176_flip.png
+/tmp/dataset/greenhouse/val/26_5_000247.png,/tmp/dataset/greenhouse/valannot/trav_gt/26_5_000247.png,/tmp/dataset/greenhouse/valdepth/26_5_000247.png
+/tmp/dataset/greenhouse/val/26_5_000247_flip.png,/tmp/dataset/greenhouse/valannot/trav_gt/26_5_000247_flip.png,/tmp/dataset/greenhouse/valdepth/26_5_000247_flip.png

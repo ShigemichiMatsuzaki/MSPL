@@ -139,5 +139,6 @@ class DownSampler(nn.Module):
                 if w2 == w1:
                     break
             output = output + self.inp_reinf(input2)
+            # print(output.size())
 
         return self.act(output)

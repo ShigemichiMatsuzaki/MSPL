@@ -9,17 +9,16 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchvision
 from utilities.utils import save_checkpoint, model_parameters, compute_flops
-from utilities.train_eval_seg import train_seg as train
-from utilities.train_eval_seg import val_seg as val
+from utilities.print_utils import *
+from utilities.utils import AverageMeter
 # from torch.utils.tensorboard import SummaryWriter
 from tensorboardX import SummaryWriter
-from loss_fns.segmentation_loss import SegmentationLoss
 import random
 import math
 import time
 import numpy as np
-from utilities.print_utils import *
 
 def main(args):
     crop_size = args.crop_size
@@ -70,9 +69,9 @@ def main(args):
 
     elif args.dataset == 'greenhouse':
         print(args.use_depth)
-        from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
-        train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='train_greenhouse_gt.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
-        val_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='val_greenhouse.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+        from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GreenhouseDepth, GREENHOUSE_CLASS_LIST
+        train_dataset = GreenhouseDepth(root=args.data_path, list_name='train_depth_ae.txt', train=True, size=crop_size, scale=args.scale, use_filter=True)
+        val_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='val_depth_ae.txt', train=False, size=crop_size, scale=args.scale, use_depth=True)
         class_weights = np.load('class_weights.npy')[:4]
         print(class_weights)
         class_wts = torch.from_numpy(class_weights).float().to(device)
@@ -85,47 +84,16 @@ def main(args):
     print_info_message('Training samples: {}'.format(len(train_dataset)))
     print_info_message('Validation samples: {}'.format(len(val_dataset)))
 
-    if args.model == 'espnetv2':
-        from model.segmentation.espnetv2 import espnetv2_seg
-        args.classes = seg_classes
-        model = espnetv2_seg(args)
-    elif args.model == 'espdnet':
-        from model.segmentation.espdnet import espdnet_seg
-        args.classes = seg_classes
-        model = espdnet_seg(args)
-    elif args.model == 'dicenet':
-        from model.segmentation.dicenet import dicenet_seg
-        model = dicenet_seg(args, classes=seg_classes)
-    else:
-        print_error_message('Arch: {} not yet supported'.format(args.model))
-        exit(-1)
+    from model.autoencoder.depth_autoencoder import espnetv2_autoenc
+    args.classes = 3
+    model = espnetv2_autoenc(args)
 
-    if args.finetune:
-        if os.path.isfile(args.finetune):
-            print_info_message('Loading weights for finetuning from {}'.format(args.finetune))
-            weight_dict = torch.load(args.finetune, map_location=torch.device(device='cpu'))
-            model.load_state_dict(weight_dict)
-            print_info_message('Done')
-        else:
-            print_warning_message('No file for finetuning. Please check.')
-
-    if args.freeze_bn:
-        print_info_message('Freezing batch normalization layers')
-        for m in model.modules():
-            if isinstance(m, nn.BatchNorm2d):
-                m.eval()
-                m.weight.requires_grad = False
-                m.bias.requires_grad = False
-
-
-    train_params = [{'params': model.get_basenet_params(), 'lr': args.lr},
-                    {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult},
-                    {'params': model.get_depth_encoder_params(), 'lr': args.lr}]
+    train_params = [{'params': model.get_basenet_params(), 'lr': args.lr * args.lr_mult}]
 
     optimizer = optim.SGD(train_params, momentum=args.momentum, weight_decay=args.weight_decay)
 
     num_params = model_parameters(model)
-    flops = compute_flops(model, input=torch.Tensor(1, 3, crop_size[0], crop_size[1]))
+    flops = compute_flops(model, input=torch.Tensor(1, 1, crop_size[0], crop_size[1]))
     print_info_message('FLOPs for an input of size {}x{}: {:.2f} million'.format(crop_size[0], crop_size[1], flops))
     print_info_message('Network Parameters: {:.2f} million'.format(num_params))
 
@@ -136,26 +104,14 @@ def main(args):
         print_log_message("Not able to generate the graph. Likely because your model is not supported by ONNX")
 
     start_epoch = 0
-    best_miou = 0.0
-    if args.resume:
-        if os.path.isfile(args.resume):
-            print_info_message("=> loading checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume, map_location=torch.device('cpu'))
-            start_epoch = checkpoint['epoch']
-            best_miou = checkpoint['best_miou']
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            print_info_message("=> loaded checkpoint '{}' (epoch {})"
-                               .format(args.resume, checkpoint['epoch']))
-        else:
-            print_warning_message("=> no checkpoint found at '{}'".format(args.resume))
 
     print('device : ' + device)
 
     #criterion = nn.CrossEntropyLoss(weight=class_wts, reduction='none', ignore_index=args.ignore_idx)
-    criterion = SegmentationLoss(n_classes=seg_classes, loss_type=args.loss_type,
-                                 device=device, ignore_idx=args.ignore_idx,
-                                 class_wts=class_wts.to(device))
+    #criterion = SegmentationLoss(n_classes=seg_classes, loss_type=args.loss_type,
+    #                             device=device, ignore_idx=args.ignore_idx,
+    #                             class_wts=class_wts.to(device))
+    criterion = nn.MSELoss()
 
     if num_gpus >= 1:
         if num_gpus == 1:
@@ -216,41 +172,88 @@ def main(args):
         json.dump(arg_dict, outfile)
 
     extra_info_ckpt = '{}_{}_{}'.format(args.model, args.s, crop_size[0])
+    best_loss = 0.0
     for epoch in range(start_epoch, args.epochs):
         lr_base = lr_scheduler.step(epoch)
         # set the optimizer with the learning rate
         # This can be done inside the MyLRScheduler
         lr_seg = lr_base * args.lr_mult
-        optimizer.param_groups[0]['lr'] = lr_base
-        optimizer.param_groups[1]['lr'] = lr_seg
-        optimizer.param_groups[2]['lr'] = lr_base
+        optimizer.param_groups[0]['lr'] = lr_seg
+        # optimizer.param_groups[1]['lr'] = lr_seg
 
-        print_info_message(
-            'Running epoch {} with learning rates: base_net {:.6f}, segment_net {:.6f}'.format(epoch, lr_base, lr_seg))
-        miou_train, train_loss = train(model, train_loader, optimizer, criterion, seg_classes, epoch, device=device, use_depth=args.use_depth)
-        miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device, use_depth=args.use_depth)
+        # Train
+        model.train()
+        losses = AverageMeter()
+        for i, batch in enumerate(train_loader):
+            inputs = batch[1].to(device=device) # Depth
+            target = batch[0].to(device=device) # RGB
+    
+            outputs = model(inputs)
+    
+            if device == 'cuda':
+                loss = criterion(outputs, target).mean()
+                if isinstance(outputs, (list, tuple)):
+                    target_dev = outputs[0].device
+                    outputs = gather(outputs, target_device=target_dev)
+            else:
+                loss = criterion(outputs, target)
+    
+            losses.update(loss.item(), inputs.size(0))
+    
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        # remember best miou and save checkpoint
-        is_best = miou_val > best_miou
-        best_miou = max(miou_val, best_miou)
+            print_info_message(
+                'Running batch {}/{} of epoch {}'.format(i+1, len(train_loader), epoch+1))
 
-        weights_dict = model.module.state_dict() if device == 'cuda' else model.state_dict()
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'arch': args.model,
-            'state_dict': weights_dict,
-            'best_miou': best_miou,
-            'optimizer': optimizer.state_dict(),
-        }, is_best, args.savedir, extra_info_ckpt)
+        train_loss = losses.avg
+    
+        writer.add_scalar('Autoencoder/LR/seg', round(lr_seg, 6), epoch)
+        writer.add_scalar('Autoencoder/Loss/train', train_loss, epoch)
 
-        writer.add_scalar('Segmentation/LR/base', round(lr_base, 6), epoch)
-        writer.add_scalar('Segmentation/LR/seg', round(lr_seg, 6), epoch)
-        writer.add_scalar('Segmentation/Loss/train', train_loss, epoch)
-        writer.add_scalar('Segmentation/Loss/val', val_loss, epoch)
-        writer.add_scalar('Segmentation/mIOU/train', miou_train, epoch)
-        writer.add_scalar('Segmentation/mIOU/val', miou_val, epoch)
-        writer.add_scalar('Segmentation/Complexity/Flops', best_miou, math.ceil(flops))
-        writer.add_scalar('Segmentation/Complexity/Params', best_miou, math.ceil(num_params))
+        # Val
+        if epoch % 5 == 0:
+            losses = AverageMeter()
+            with torch.no_grad():
+                for i, batch in enumerate(val_loader):
+                    inputs = batch[2].to(device=device) # Depth
+                    target = batch[0].to(device=device) # RGB
+            
+                    outputs = model(inputs)
+            
+                    if device == 'cuda':
+                        loss = criterion(outputs, target)# .mean()
+                        if isinstance(outputs, (list, tuple)):
+                            target_dev = outputs[0].device
+                            outputs = gather(outputs, target_device=target_dev)
+                    else:
+                        loss = criterion(outputs, target)
+            
+                    losses.update(loss.item(), inputs.size(0))
+
+                    image_grid = torchvision.utils.make_grid(outputs)
+                    writer.add_image('Autoencoder/results', image_grid, epoch)
+            
+            val_loss = losses.avg
+    
+            print_info_message(
+                'Running epoch {} with learning rates: base_net {:.6f}, segment_net {:.6f}'.format(epoch, lr_base, lr_seg))
+    
+            # remember best miou and save checkpoint
+            is_best = val_loss < best_loss
+            best_loss = min(val_loss, best_loss)
+    
+            weights_dict = model.module.state_dict() if device == 'cuda' else model.state_dict()
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.model,
+                'state_dict': weights_dict,
+                'best_loss': best_loss,
+                'optimizer': optimizer.state_dict(),
+            }, is_best, args.savedir, extra_info_ckpt)
+    
+            writer.add_scalar('Autoencoder/Loss/val', val_loss, epoch)
 
     writer.close()
 
@@ -353,7 +356,7 @@ if __name__ == "__main__":
 
     args.crop_size = tuple(args.crop_size)
     timestr = time.strftime("%Y%m%d-%H%M%S")
-    args.savedir = '{}/model_{}_{}/s_{}_sch_{}_loss_{}_res_{}_sc_{}_{}/{}'.format(args.savedir, args.model, args.dataset, args.s,
+    args.savedir = '{}/model_{}_{}/s_{}_sch_{}_loss_{}_res_{}_sc_{}_{}_autoenc/{}'.format(args.savedir, args.model, args.dataset, args.s,
                                                                          args.scheduler,
                                                                          args.loss_type, args.crop_size[0], args.scale[0], args.scale[1], timestr)
     main(args)

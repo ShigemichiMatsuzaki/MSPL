@@ -121,7 +121,8 @@ class ESPNetv2Segmentation(nn.Module):
             del x
             x = None
 
-        enc_out_l2 = self.base_net.level2_0(enc_out_l1, x)  # 56
+        # enc_out_l2 = self.base_net.level2_0(enc_out_l1, x)  # 56
+        enc_out_l2 = self.base_net.level2_0(enc_out_l1)  # 56
 
         enc_out_l3_0 = self.base_net.level3_0(enc_out_l2, x)  # down-sample
         for i, layer in enumerate(self.base_net.level3):

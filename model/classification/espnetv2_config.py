@@ -18,5 +18,6 @@ recept_limit = [13, 11, 9, 7, 5]
 branches = 4
 
 # input reinforcement related parameters
-config_inp_reinf = 3
+# config_inp_reinf = 3
+config_inp_reinf = 1
 input_reinforcement = True
