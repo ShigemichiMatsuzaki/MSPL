@@ -3,9 +3,10 @@ import torch
 import torch.utils.data as data
 from PIL import Image
 import cv2
-from transforms.segmentation.data_transforms import RandomFlip, RandomCrop, RandomScale, Normalize, Resize, Compose
+from transforms.segmentation.data_transforms import RandomFlip, RandomCrop, RandomScale, Normalize, Resize, Compose, Tensorize
 from collections import OrderedDict
 import numpy as np
+from torchvision.transforms import functional as F
 
 GREENHOUSE_CLASS_LIST = ['end_of_plant', 'other_plant', 'artificial', 'ground']
 
@@ -130,13 +131,15 @@ class GreenhouseRGBDSegmentation(data.Dataset):
                 RandomScale(scale=self.scale),
                 RandomCrop(crop_size=self.size),
                 RandomFlip(),
-                Normalize()
+                #Normalize()
+                Tensorize()
             ]
         )
         val_transforms = Compose(
             [
                 Resize(size=self.size),
-                Normalize()
+                #Normalize()
+                Tensorize()
             ]
         )
         return train_transforms, val_transforms
@@ -220,14 +223,12 @@ class GreenhouseDepth(data.Dataset):
             [
                 RandomScale(scale=self.scale),
                 RandomCrop(crop_size=self.size),
-                RandomFlip(),
-                Normalize()
+                RandomFlip()
             ]
         )
         val_transforms = Compose(
             [
-                Resize(size=self.size),
-                Normalize()
+                Resize(size=self.size)
             ]
         )
         return train_transforms, val_transforms
@@ -255,4 +256,4 @@ class GreenhouseDepth(data.Dataset):
         # Apply transformation
         rgb_img, _, depth_img = self.train_transforms(rgb_img, rgb_img, depth_img) # Second arg is a dummy
 
-        return rgb_img, depth_img
+        return F.to_tensor(rgb_img), F.to_tensor(depth_img)

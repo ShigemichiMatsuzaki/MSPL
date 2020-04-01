@@ -9,7 +9,8 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from utilities.utils import save_checkpoint, model_parameters, compute_flops
+import torchvision
+from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img
 from utilities.train_eval_seg import train_seg as train
 from utilities.train_eval_seg import val_seg as val
 # from torch.utils.tensorboard import SummaryWriter
@@ -20,6 +21,7 @@ import math
 import time
 import numpy as np
 from utilities.print_utils import *
+from collections import OrderedDict
 
 def main(args):
     crop_size = args.crop_size
@@ -118,10 +120,15 @@ def main(args):
                 m.bias.requires_grad = False
 
 
-    train_params = [{'params': model.get_basenet_params(), 'lr': args.lr},
-                    {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult},
-                    {'params': model.get_depth_encoder_params(), 'lr': args.lr}]
+    if args.use_depth:
+        train_params = [{'params': model.get_basenet_params(), 'lr': args.lr},
+                        {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult},
+                        {'params': model.get_depth_encoder_params(), 'lr': args.lr}]
+    else:
+        train_params = [{'params': model.get_basenet_params(), 'lr': args.lr},
+                        {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult}]
 
+    
     optimizer = optim.SGD(train_params, momentum=args.momentum, weight_decay=args.weight_decay)
 
     num_params = model_parameters(model)
@@ -215,6 +222,14 @@ def main(args):
         arg_dict['flops'] = '{} '.format(flops)
         json.dump(arg_dict, outfile)
 
+
+    color_encoding = OrderedDict([
+        ('end_of_plant', (0, 255, 0)),
+        ('other_part_of_plant', (0, 255, 255)),
+        ('artificial_objects', (255, 0, 0)),
+        ('ground', (255, 255, 0)),
+        ('background', (0, 0, 0))
+    ])
     extra_info_ckpt = '{}_{}_{}'.format(args.model, args.s, crop_size[0])
     for epoch in range(start_epoch, args.epochs):
         lr_base = lr_scheduler.step(epoch)
@@ -223,12 +238,24 @@ def main(args):
         lr_seg = lr_base * args.lr_mult
         optimizer.param_groups[0]['lr'] = lr_base
         optimizer.param_groups[1]['lr'] = lr_seg
-        optimizer.param_groups[2]['lr'] = lr_base
+        if args.use_depth:
+            optimizer.param_groups[2]['lr'] = lr_base
 
         print_info_message(
             'Running epoch {} with learning rates: base_net {:.6f}, segment_net {:.6f}'.format(epoch, lr_base, lr_seg))
         miou_train, train_loss = train(model, train_loader, optimizer, criterion, seg_classes, epoch, device=device, use_depth=args.use_depth)
         miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device, use_depth=args.use_depth)
+
+        batch = iter(val_loader).next()
+        if args.use_depth:
+            in_training_visualization_img(model, images=batch[0].to(device=device), depths=batch[2].to(device=device), labels=batch[1].to(device=device), class_encoding=color_encoding, writer=writer, epoch=epoch, data='Segmentation', device=device)
+        else:
+            in_training_visualization_img(model, images=batch[0].to(device=device), labels=batch[1].to(device=device), class_encoding=color_encoding, writer=writer, epoch=epoch, data='Segmentation', device=device)
+
+
+
+#            image_grid = torchvision.utils.make_grid(outputs.data.cpu()).numpy()
+#            writer.add_image('Segmentation/results/val', image_grid, epoch)
 
         # remember best miou and save checkpoint
         is_best = miou_val > best_miou

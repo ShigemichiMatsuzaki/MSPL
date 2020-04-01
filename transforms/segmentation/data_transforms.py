@@ -12,6 +12,20 @@ from torchvision.transforms import Pad
 from torchvision.transforms import functional as F
 from transforms.classification.data_transforms import MEAN, STD
 
+class Tensorize(object):
+    def __call__(self, rgb_img, label_img=None, depth_img=None):
+        rgb_img = F.to_tensor(rgb_img) # convert to tensor (values between 0 and 1)
+        label_img = torch.LongTensor(np.array(label_img).astype(np.int64))
+
+        if depth_img is not None:
+            depth_img = F.to_tensor(depth_img) # convert to tensor (values between 0 and 1)
+#            depth_img = F.normalize(depth_img, MEAN[0], STD[0]) # normalize the tensor
+
+            return rgb_img, label_img, depth_img
+        else:
+            return rgb_img, label_img
+
+
 class Normalize(object):
     '''
         Normalize the tensors

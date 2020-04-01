@@ -112,6 +112,7 @@ def main(args):
     #                             device=device, ignore_idx=args.ignore_idx,
     #                             class_wts=class_wts.to(device))
     criterion = nn.MSELoss()
+    # criterion = nn.L1Loss()
 
     if num_gpus >= 1:
         if num_gpus == 1:
@@ -204,13 +205,20 @@ def main(args):
             loss.backward()
             optimizer.step()
 
+#             if not (i % 10):
+#                 print("Step {}, write images".format(i))
+#                 image_grid = torchvision.utils.make_grid(outputs.data.cpu()).numpy()
+#                 writer.add_image('Autoencoder/results/train', image_grid, len(train_loader) * epoch + i)
+
+            writer.add_scalar('Autoencoder/Loss/train', loss.item(), len(train_loader) * epoch + i)
+
             print_info_message(
                 'Running batch {}/{} of epoch {}'.format(i+1, len(train_loader), epoch+1))
+
 
         train_loss = losses.avg
     
         writer.add_scalar('Autoencoder/LR/seg', round(lr_seg, 6), epoch)
-        writer.add_scalar('Autoencoder/Loss/train', train_loss, epoch)
 
         # Val
         if epoch % 5 == 0:
@@ -232,9 +240,13 @@ def main(args):
             
                     losses.update(loss.item(), inputs.size(0))
 
-                    image_grid = torchvision.utils.make_grid(outputs)
-                    writer.add_image('Autoencoder/results', image_grid, epoch)
-            
+                    image_grid = torchvision.utils.make_grid(outputs.data.cpu()).numpy()
+                    writer.add_image('Autoencoder/results/val', image_grid, epoch)
+                    image_grid = torchvision.utils.make_grid(inputs.data.cpu()).numpy()
+                    writer.add_image('Autoencoder/inputs/val', image_grid, epoch)
+                    image_grid = torchvision.utils.make_grid(target.data.cpu()).numpy()
+                    writer.add_image('Autoencoder/target/val', image_grid, epoch)
+
             val_loss = losses.avg
     
             print_info_message(
@@ -343,6 +355,8 @@ if __name__ == "__main__":
             weight_file_key = '{}_{}'.format('espnetv2', args.s)
             assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)
             args.weights = model_weight_map[weight_file_key]
+
+            args.depth_weights = './results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200323-073331/espnetv2_2.0_480_checkpoint.pth.tar'
         else:
             weight_file_key = '{}_{}'.format(args.model, args.s)
             assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)

@@ -292,6 +292,7 @@ def espdnet_seg(args):
     classes = args.classes
     scale=args.s
     weights = args.weights
+    depth_weights = args.weights
     dataset=args.dataset
     model = ESPDNetSegmentation(args, classes=classes, dataset=dataset)
     if weights:
@@ -303,27 +304,42 @@ def espdnet_seg(args):
         else:
             print_error_message('Weight file does not exist at {}. Please check. Exiting!!'.format(weights))
             exit()
+
         print_info_message('Loading pretrained basenet model weights')
         # Load pretrained weights for RGB
         basenet_dict = model.base_net.state_dict()
         model_dict = model.state_dict()
         overlap_dict = {k: v for k, v in pretrained_dict.items() if k in basenet_dict}
+
         if len(overlap_dict) == 0:
             print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
             exit()
+
         print_info_message('{:.2f} % of weights copied from basenet to segnet'.format(len(overlap_dict) * 1.0/len(model_dict) * 100))
         basenet_dict.update(overlap_dict)
         model.base_net.load_state_dict(basenet_dict)
         print_info_message('Pretrained basenet model loaded!!')
+    else:
+        print_warning_message('Training from scratch!!')
+
+    if depth_weights:
+        import os
+        if os.path.isfile(depth_weights):
+            num_gpus = torch.cuda.device_count()
+            device = 'cuda' if num_gpus >= 1 else 'cpu'
+            pretrained_dict = torch.load(depth_weights, map_location=torch.device(device))
+        else:
+            print_error_message('Weight file does not exist at {}. Please check. Exiting!!'.format(depth_weights))
+            exit()
 
         # Load pretrained weights for RGB
         dbasenet_dict = model.depth_base_net.state_dict()
         # overlap_dict = {k: v for k, v in pretrained_dict.items() if k in dbasenet_dict and k != 'level1.conv.weight'}
         overlap_dict = {k: v for k, v in pretrained_dict.items() if k in dbasenet_dict}
-        print(overlap_dict['level1.conv.weight'].size())
+#        print(overlap_dict['level1.conv.weight'].size())
         overlap_dict['level1.conv.weight'] = torch.mean(overlap_dict['level1.conv.weight'], dim=1, keepdim=True)
-        print(overlap_dict['level1.conv.weight'].size())
-        # print(overlap_dict.keys())
+#        print(overlap_dict['level1.conv.weight'].size())
+        print(overlap_dict.keys())
         # exit()
         if len(overlap_dict) == 0:
             print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
@@ -331,8 +347,7 @@ def espdnet_seg(args):
         dbasenet_dict.update(overlap_dict)
         model.depth_base_net.load_state_dict(dbasenet_dict)
         print_info_message('Pretrained depth basenet model loaded!!')
-    else:
-        print_warning_message('Training from scratch!!')
+
     return model
 
 if __name__ == "__main__":

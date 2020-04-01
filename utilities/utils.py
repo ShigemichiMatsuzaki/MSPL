@@ -3,6 +3,9 @@ import os
 import torch
 from utilities.print_utils import print_info_message
 import numpy as np
+import torchvision
+import torchvision.transforms as transforms
+from collections import OrderedDict
 
 #============================================
 __author__ = "Sachin Mehta"
@@ -66,3 +69,110 @@ def compute_flops(model, input=None):
     flops = model.compute_average_flops_cost()  # + (model.classifier.in_features * model.classifier.out_features)
     flops = flops / 1e6 / 2
     return flops
+
+def in_training_visualization_img(model, images, depths=None, labels=None, class_encoding=None, writer=None, epoch=None, data=None, device=None):
+    # Make predictions!
+    model.eval()
+    with torch.no_grad():
+        if depths is not None:
+            predictions = model(images, depths)
+        else:
+            predictions = model(images)
+    
+    # Predictions is one-hot encoded with "num_classes" channels.
+    # Convert it to a single int using the indices where the maximum (1) occurs
+    _, predictions = torch.max(predictions.data, 1)
+    
+       # label_to_rgb : Sequence of processes
+    #  1. LongTensorToRGBPIL(tensor) -> PIL Image : Convert label tensor to color map
+    #  2. transforms.ToTensor() -> Tensor : Convert PIL Image to a tensor
+    label_to_rgb = transforms.Compose([
+        LongTensorToRGBPIL(class_encoding)#,
+#        transforms.ToTensor()
+    ])
+
+    # Do transformation of label tensor and prediction tensor
+    color_train       = batch_transform(labels.data.cpu(), label_to_rgb)
+    color_predictions = batch_transform(predictions.cpu(), label_to_rgb)
+
+    write_summary_batch(images.data.cpu(), color_train, color_predictions, writer, epoch, data)
+
+def batch_transform(batch, transform):
+    """Applies a transform to a batch of samples.
+    Keyword arguments:
+    - batch (): a batch os samples
+    - transform (callable): A function/transform to apply to ``batch``
+    """
+
+    # Convert the single channel label to RGB in tensor form
+    # 1. torch.unbind removes the 0-dimension of "labels" and returns a tuple of
+    # all slices along that dimension
+    # 2. the transform is applied to each slice
+    transf_slices = [transform(tensor) for tensor in torch.unbind(batch)]
+
+    return torch.stack(transf_slices)
+
+def write_summary_batch(images, train_labels, pred_labels, writer, epoch, data):
+    # Make a grid with the images and labels and convert it to numpy
+    images = torchvision.utils.make_grid(images).numpy()
+    train_labels = torchvision.utils.make_grid(train_labels).numpy()
+    pred_labels = torchvision.utils.make_grid(pred_labels).numpy()
+
+#    images = np.transpose(images, (1, 2, 0))
+#    train_labels = np.transpose(train_labels, (1, 2, 0))
+#    pred_labels = np.transpose(pred_labels, (1, 2, 0))
+
+    writer.add_image(data + '/images', images, epoch)
+    writer.add_image(data + '/train_labels', train_labels, epoch)
+    writer.add_image(data + '/pred_labels', pred_labels, epoch)
+
+class LongTensorToRGBPIL(object):
+    """Converts a ``torch.LongTensor`` to a ``PIL image``.
+
+    The input is a ``torch.LongTensor`` where each pixel's value identifies the
+    class.
+
+    Keyword arguments:
+    - rgb_encoding (``OrderedDict``): An ``OrderedDict`` that relates pixel
+    values, class names, and class colors.
+
+    """
+    def __init__(self, rgb_encoding):
+        self.rgb_encoding = rgb_encoding
+
+    def __call__(self, tensor):
+        """Performs the conversion from ``torch.LongTensor`` to a ``PIL image``
+
+        Keyword arguments:
+        - tensor (``torch.LongTensor``): the tensor to convert
+
+        Returns:
+        A ``PIL.Image``.
+
+        """
+        # Check if label_tensor is a LongTensor
+        if not isinstance(tensor, torch.LongTensor):
+            raise TypeError("label_tensor should be torch.LongTensor. Got {}"
+                            .format(type(tensor)))
+        # Check if encoding is a ordered dictionary
+        if not isinstance(self.rgb_encoding, OrderedDict):
+            raise TypeError("encoding should be an OrderedDict. Got {}".format(
+                type(self.rgb_encoding)))
+
+        # label_tensor might be an image without a channel dimension, in this
+        # case unsqueeze it
+        if len(tensor.size()) == 2:
+            tensor.unsqueeze_(0)
+
+        # Initialize
+        color_tensor = torch.ByteTensor(3, tensor.size(1), tensor.size(2))
+
+        for index, (class_name, color) in enumerate(self.rgb_encoding.items()):
+            # Get a mask of elements equal to index
+            mask = torch.eq(tensor, index).squeeze_()
+            # Fill color_tensor with corresponding colors
+            for channel, color_value in enumerate(color):
+                color_tensor[channel].masked_fill_(mask, color_value)
+
+#        return ToPILImage()(color_tensor)
+        return color_tensor
