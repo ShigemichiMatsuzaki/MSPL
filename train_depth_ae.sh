@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES=1 python train_depth_ae.py \
   --scheduler hybrid \
   --clr-max 61 \
   --use-depth true \
-  --epochs 500
+  --epochs 1000
 
 #CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
 #  --dataset greenhouse \

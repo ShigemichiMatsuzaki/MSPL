@@ -19,13 +19,14 @@ class ESPNetv2Autoencoder(nn.Module):
     This class defines the ESPNetv2 architecture for the Semantic Segmenation
     '''
 
-    def __init__(self, args, classes=1, dataset='greenhouse'):
+    def __init__(self, args, classes=3, dataset='greenhouse'):
         super().__init__()
 
         # =============================================================
         #                       BASE NETWORK
         # =============================================================
         args.channels = 1 # Only depth channel
+        args.input_reinforcement = False
         self.base_net = ESPNetv2Segmentation(args, classes=classes, dataset=dataset) #imagenet model
         # print(self.base_net.state_dict()['base_net.level1.conv.weight'].size())
         # config = self.base_net.config
