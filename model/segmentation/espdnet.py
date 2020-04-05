@@ -13,6 +13,39 @@ from model.classification.espnetv2 import EESPNet
 from utilities.print_utils import *
 from torch.nn import functional as F
 
+class FusionGate(nn.Module):
+    '''
+    Gate to fuse RGB and depth features
+    '''
+    def __init__(self, nchannel):
+        super().__init__()
+
+        # Channel size of input features (must be the same)
+        self.nchannel = nchannel
+
+        self.conv_1x1 = C(nIn=2 * self.nchannel, nOut=self.nchannel, kSize=1)
+        self.sigmoid  = torch.nn.Sigmoid()
+        
+    def forward(self, rgb, depth):
+        # print(rgb.size())
+        # print(depth.size())
+        # 1. Concat RGB and depth features
+        output = torch.cat((rgb, depth), 1)
+
+        # 2. 1x1 convolution
+        output = self.conv_1x1(output)
+
+        # 3. Sigmoid
+        weight = self.sigmoid(output)
+
+        # 4. Multiply each features by the yielded weights
+        size = weight.size()
+        w_rgb = rgb * weight
+        w_depth = depth * (torch.ones(size).to('cuda') - weight)
+
+        output = w_rgb + w_depth
+
+        return output
 
 class ESPDNetSegmentation(nn.Module):
     '''
@@ -43,6 +76,11 @@ class ESPDNetSegmentation(nn.Module):
         del self.depth_base_net.level5
         del self.depth_base_net.level5_0
         config = self.depth_base_net.config
+
+        self.fusion_gate_level1 = FusionGate(nchannel=32)
+        self.fusion_gate_level2 = FusionGate(nchannel=128)
+        self.fusion_gate_level3 = FusionGate(nchannel=256)
+        self.fusion_gate_level4 = FusionGate(nchannel=512)
 
         # Layer 1
 #        self.depth_encoder_level1 = nn.Sequential(
@@ -88,7 +126,8 @@ class ESPDNetSegmentation(nn.Module):
             'pascal': 16,
             'city': 16,
             'coco': 32,
-            'greenhouse': 16
+            'greenhouse': 16,
+            'ishihara': 16
         }
         base_dec_planes = dec_feat_dict[dataset]
         dec_planes = [4*base_dec_planes, 3*base_dec_planes, 2*base_dec_planes, classes]
@@ -192,7 +231,8 @@ class ESPDNetSegmentation(nn.Module):
             d_enc_out_l1 = self.depth_base_net.level1(x_d) # Depth
     
             # Fusion level 1
-            enc_out_l1 += d_enc_out_l1
+            # enc_out_l1 += d_enc_out_l1
+            enc_out_l1 = self.fusion_gate_level1(enc_out_l1, d_enc_out_l1)
 
         # 
         # Second layer (Strided EESP)
@@ -202,7 +242,8 @@ class ESPDNetSegmentation(nn.Module):
             d_enc_out_l2 = self.depth_base_net.level2_0(d_enc_out_l1)
     
             # Fusion level 2
-            enc_out_l2 += d_enc_out_l2
+            # enc_out_l2 += d_enc_out_l2
+            enc_out_l2 = self.fusion_gate_level2(enc_out_l2, d_enc_out_l2)
 
         # 
         # Third layer 1 (Strided EESP)
@@ -219,17 +260,20 @@ class ESPDNetSegmentation(nn.Module):
                 if x_d is not None: 
                     d_enc_out_l3 = dlayer(d_enc_out_l3_0)
                     if self.dense_fuse:
-                        enc_out_l3 += d_enc_out_l3
+                        # enc_out_l3 += d_enc_out_l3
+                        enc_out_l3 = self.fusion_gate_level3(enc_out_l3, d_enc_out_l3)
             else:
                 enc_out_l3 = dlayer(enc_out_l3)
                 if x_d is not None: 
                     d_enc_out_l3 = dlayer(d_enc_out_l3)
                     if self.dense_fuse:
-                        enc_out_l3 += d_enc_out_l3
+                        # enc_out_l3 += d_enc_out_l3
+                        enc_out_l3 = self.fusion_gate_level3(enc_out_l3, d_enc_out_l3)
 
         if x_d is not None and not self.dense_fuse:
             # Fusion level 3
-            enc_out_l3 += d_enc_out_l3
+            # enc_out_l3 += d_enc_out_l3
+            enc_out_l3 = self.fusion_gate_level3(enc_out_l3, d_enc_out_l3)
 
         # 
         # Forth layer 1 (Strided EESP)
@@ -246,17 +290,20 @@ class ESPDNetSegmentation(nn.Module):
                 if x_d is not None: 
                     d_enc_out_l4 = dlayer(d_enc_out_l4_0)
                     if self.dense_fuse:
-                        enc_out_l4 += d_enc_out_l4
+                        # enc_out_l4 += d_enc_out_l4
+                        enc_out_l4 = self.fusion_gate_level4(enc_out_l4, d_enc_out_l4)
             else:
                 enc_out_l4 = layer(enc_out_l4)
                 if x_d is not None: 
                     d_enc_out_l4 = dlayer(d_enc_out_l4)
                     if self.dense_fuse:
-                        enc_out_l4 += d_enc_out_l4
+                        # enc_out_l4 += d_enc_out_l4
+                        enc_out_l4 = self.fusion_gate_level4(enc_out_l4, d_enc_out_l4)
 
         if x_d is not None and not self.dense_fuse:
             # Fusion level 4
-            enc_out_l4 += d_enc_out_l4
+            # enc_out_l4 += d_enc_out_l4
+            enc_out_l4 = self.fusion_gate_level4(enc_out_l4, d_enc_out_l4)
 
 
         # *** 5th layer is for and classification and removed for segmentation ***
@@ -292,7 +339,8 @@ def espdnet_seg(args):
     classes = args.classes
     scale=args.s
     weights = args.weights
-    depth_weights = args.weights
+    #depth_weights = 'results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200401-114045/espnetv2_2.0_480_checkpoint.pth.tar'
+    depth_weights = weights
     dataset=args.dataset
     model = ESPDNetSegmentation(args, classes=classes, dataset=dataset)
     if weights:
@@ -323,6 +371,7 @@ def espdnet_seg(args):
         print_warning_message('Training from scratch!!')
 
     if depth_weights:
+        print(depth_weights)
         import os
         if os.path.isfile(depth_weights):
             num_gpus = torch.cuda.device_count()
@@ -334,13 +383,18 @@ def espdnet_seg(args):
 
         # Load pretrained weights for RGB
         dbasenet_dict = model.depth_base_net.state_dict()
-        # overlap_dict = {k: v for k, v in pretrained_dict.items() if k in dbasenet_dict and k != 'level1.conv.weight'}
+#        print(list(pretrained_dict['state_dict'].keys())[0].lstrip('base_net.base_net.'))
+#        print(list(dbasenet_dict.keys())[0])
+#        overlap_dict = {k.lstrip("base_net.base_net."): v for k, v in pretrained_dict['state_dict'].items() if k.lstrip('base_net.base_net.') in dbasenet_dict and k.lstrip("base_net.base_net.") != 'level1.conv.weight'}
         overlap_dict = {k: v for k, v in pretrained_dict.items() if k in dbasenet_dict}
-#        print(overlap_dict['level1.conv.weight'].size())
+        # overlap_dict = {k.lstrip("base_net.base_net."): v for k, v in pretrained_dict['state_dict'].items() if k.lstrip('base_net.base_net.') in dbasenet_dict}
+
+#        for k, v in pretrained_dict['state_dict'].items():
+#            key = k.lstrip('base_net.base_net')
+#            print(key)
+#            if key in dbasenet_dict:
+#                overlap_dict.update({key: v})
         overlap_dict['level1.conv.weight'] = torch.mean(overlap_dict['level1.conv.weight'], dim=1, keepdim=True)
-#        print(overlap_dict['level1.conv.weight'].size())
-        print(overlap_dict.keys())
-        # exit()
         if len(overlap_dict) == 0:
             print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
             exit()

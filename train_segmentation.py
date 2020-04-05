@@ -73,13 +73,45 @@ def main(args):
     elif args.dataset == 'greenhouse':
         print(args.use_depth)
         from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
-        train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='train_greenhouse_gt.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+        train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
         val_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='val_greenhouse.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
         class_weights = np.load('class_weights.npy')[:4]
         print(class_weights)
         class_wts = torch.from_numpy(class_weights).float().to(device)
 
         seg_classes = len(GREENHOUSE_CLASS_LIST)
+        color_encoding = OrderedDict([
+            ('end_of_plant', (0, 255, 0)),
+            ('other_part_of_plant', (0, 255, 255)),
+            ('artificial_objects', (255, 0, 0)),
+            ('ground', (255, 255, 0)),
+            ('background', (0, 0, 0))
+        ])
+    elif args.dataset == 'ishihara':
+        print(args.use_depth)
+        from data_loader.segmentation.ishihara_rgbd import IshiharaRGBDSegmentation, ISHIHARA_RGBD_CLASS_LIST
+        train_dataset = IshiharaRGBDSegmentation(root=args.data_path, list_name='ishihara_rgbd_train.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+        val_dataset = IshiharaRGBDSegmentation(root=args.data_path, list_name='ishihara_rgbd_val.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+
+        seg_classes = len(ISHIHARA_RGBD_CLASS_LIST)
+
+        class_wts = torch.ones(seg_classes)
+
+        color_encoding = OrderedDict([
+            ('Unlabeled', (  0,  0,  0)),
+            ('Building', ( 70, 70, 70)), 
+            ('Fence', (190,153,153)),
+            ('Others', ( 72,  0, 90)),
+            ('Pedestrian', (220, 20, 60)),
+            ('Pole', (153,153,153)), 
+            ('Road ', (157,234, 50)),
+            ('Road', (128, 64,128)), 
+            ('Sidewalk', (244, 35,232)),
+            ('Vegetation', (107,142, 35)),
+            ('Car', (  0,  0,255)),
+            ('Wall', (102,102,156)),
+            ('Traffic ', (220,220,  0)) 
+        ])
     else:
         print_error_message('Dataset: {} not yet supported'.format(args.dataset))
         exit(-1)
@@ -129,7 +161,7 @@ def main(args):
                         {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult}]
 
     
-    optimizer = optim.SGD(train_params, momentum=args.momentum, weight_decay=args.weight_decay)
+    optimizer = optim.SGD(train_params, lr=args.lr * args.lr_mult, momentum=args.momentum, weight_decay=args.weight_decay)
 
     num_params = model_parameters(model)
     flops = compute_flops(model, input=torch.Tensor(1, 3, crop_size[0], crop_size[1]))
@@ -223,13 +255,7 @@ def main(args):
         json.dump(arg_dict, outfile)
 
 
-    color_encoding = OrderedDict([
-        ('end_of_plant', (0, 255, 0)),
-        ('other_part_of_plant', (0, 255, 255)),
-        ('artificial_objects', (255, 0, 0)),
-        ('ground', (255, 255, 0)),
-        ('background', (0, 0, 0))
-    ])
+
     extra_info_ckpt = '{}_{}_{}'.format(args.model, args.s, crop_size[0])
     for epoch in range(start_epoch, args.epochs):
         lr_base = lr_scheduler.step(epoch)
@@ -357,6 +383,8 @@ if __name__ == "__main__":
         print_log_message('Using scale = ({}, {})'.format(args.scale[0], args.scale[1]))
     elif args.dataset == 'greenhouse':
         args.scale = (0.5, 2.0)
+    elif args.dataset == 'ishihara':
+        args.scale = (0.5, 2.0)
     else:
         print_error_message('{} dataset not yet supported'.format(args.dataset))
 
@@ -367,6 +395,9 @@ if __name__ == "__main__":
             weight_file_key = '{}_{}'.format('espnetv2', args.s)
             assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)
             args.weights = model_weight_map[weight_file_key]
+
+    #        if args.use_depth:
+    #            args.weights
         else:
             weight_file_key = '{}_{}'.format(args.model, args.s)
             assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)

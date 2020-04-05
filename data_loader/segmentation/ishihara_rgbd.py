@@ -8,11 +8,25 @@ from collections import OrderedDict
 import numpy as np
 from torchvision.transforms import functional as F
 
-GREENHOUSE_CLASS_LIST = ['end_of_plant', 'other_plant', 'artificial', 'ground']
+ISHIHARA_RGBD_CLASS_LIST = [
+    'Unlabeled',
+    'Building',
+    'Fence',
+    'Others',
+    'Pedestrian',
+    'Pole',
+    'Road line',
+    'Road',
+    'Sidewalk',
+    'Vegetation',
+    'Car',
+    'Wall',
+    'Traffic sign'
+]
 
-class GreenhouseSegmentation(data.Dataset):
+class IshiharaRGBDSegmentation(data.Dataset):
 
-    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 264), ignore_idx=255, coarse=True):
+    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(400, 304), ignore_idx=255, coarse=True):
 
         self.train = train
         if self.train:
@@ -80,9 +94,9 @@ class GreenhouseSegmentation(data.Dataset):
 
         return rgb_img, label_img
 
-class GreenhouseRGBDSegmentation(data.Dataset):
+class IshiharaRGBDSegmentation(data.Dataset):
 
-    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 264), ignore_idx=4, use_depth=True):
+    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(400, 304), ignore_idx=255, use_depth=True):
 
         self.train = train
         self.use_depth = use_depth
@@ -102,6 +116,7 @@ class GreenhouseRGBDSegmentation(data.Dataset):
 #                rgb_img_loc = root + os.sep + line_split[1].rstrip()
                 label_img_loc = line_split[1].rstrip()
                 assert os.path.isfile(rgb_img_loc)
+                #print(label_img_loc)
                 assert os.path.isfile(label_img_loc)
                 if self.use_depth:
                     depth_img_loc = line_split[2].rstrip()
@@ -131,15 +146,15 @@ class GreenhouseRGBDSegmentation(data.Dataset):
                 RandomScale(scale=self.scale),
                 RandomCrop(crop_size=self.size),
                 RandomFlip(),
-                #Normalize()
-                Tensorize()
+                Normalize()
+#                Tensorize()
             ]
         )
         val_transforms = Compose(
             [
                 Resize(size=self.size),
-                #Normalize()
-                Tensorize()
+                Normalize()
+#                Tensorize()
             ]
         )
         return train_transforms, val_transforms
@@ -180,7 +195,7 @@ class GreenhouseRGBDSegmentation(data.Dataset):
         else:
             return rgb_img, label_img
 
-class GreenhouseDepth(data.Dataset):
+class IshiharaDepth(data.Dataset):
 
     def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 264), use_filter=True):
 
