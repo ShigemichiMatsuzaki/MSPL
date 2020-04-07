@@ -97,6 +97,33 @@ def in_training_visualization_img(model, images, depths=None, labels=None, class
 
     write_summary_batch(images.data.cpu(), color_train, color_predictions, writer, epoch, data)
 
+def in_training_visualization_2(model, images, depths=None, labels=None, class_encoding=None, writer=None, epoch=None, data=None, device=None):
+    # Make predictions!
+    model.eval()
+    with torch.no_grad():
+        if depths is not None:
+            predictions = model(images, depths)
+        else:
+            predictions = model(images)
+    
+    # Predictions is one-hot encoded with "num_classes" channels.
+    # Convert it to a single int using the indices where the maximum (1) occurs
+    _, predictions = torch.max(predictions[0].data, 1)
+    
+       # label_to_rgb : Sequence of processes
+    #  1. LongTensorToRGBPIL(tensor) -> PIL Image : Convert label tensor to color map
+    #  2. transforms.ToTensor() -> Tensor : Convert PIL Image to a tensor
+    label_to_rgb = transforms.Compose([
+        LongTensorToRGBPIL(class_encoding)#,
+#        transforms.ToTensor()
+    ])
+
+    # Do transformation of label tensor and prediction tensor
+    color_train       = batch_transform(labels.data.cpu(), label_to_rgb)
+    color_predictions = batch_transform(predictions.cpu(), label_to_rgb)
+
+    write_summary_batch(images.data.cpu(), color_train, color_predictions, writer, epoch, data)
+
 def batch_transform(batch, transform):
     """Applies a transform to a batch of samples.
     Keyword arguments:
@@ -176,3 +203,13 @@ class LongTensorToRGBPIL(object):
 
 #        return ToPILImage()(color_tensor)
         return color_tensor
+
+def calc_cls_class_weight(data_loader, class_num):
+    class_array = np.zeros(class_num).astype(np.float32)
+
+    for n, batch in enumerate(data_loader):
+        cls_ids = batch[3].numpy()
+        for i in range(0, class_num):
+            class_array[i] += (cls_ids == i).sum()
+
+    return class_array / class_array.sum()

@@ -15,7 +15,8 @@ from transforms.classification.data_transforms import MEAN, STD
 class Tensorize(object):
     def __call__(self, rgb_img, label_img=None, depth_img=None):
         rgb_img = F.to_tensor(rgb_img) # convert to tensor (values between 0 and 1)
-        label_img = torch.LongTensor(np.array(label_img).astype(np.int64))
+        if label_img is not None:
+            label_img = torch.LongTensor(np.array(label_img).astype(np.int64))
 
         if depth_img is not None:
             depth_img = F.to_tensor(depth_img) # convert to tensor (values between 0 and 1)
@@ -33,7 +34,8 @@ class Normalize(object):
     def __call__(self, rgb_img, label_img=None, depth_img=None):
         rgb_img = F.to_tensor(rgb_img) # convert to tensor (values between 0 and 1)
         rgb_img = F.normalize(rgb_img, MEAN, STD) # normalize the tensor
-        label_img = torch.LongTensor(np.array(label_img).astype(np.int64))
+        if label_img is not None:
+            label_img = torch.LongTensor(np.array(label_img).astype(np.int64))
 
         if depth_img is not None:
             depth_img = F.to_tensor(depth_img) # convert to tensor (values between 0 and 1)
@@ -51,7 +53,8 @@ class RandomFlip(object):
     def __call__(self, rgb_img, label_img, depth_img=None):
         if random.random() < 0.5:
             rgb_img = rgb_img.transpose(Image.FLIP_LEFT_RIGHT)
-            label_img = label_img.transpose(Image.FLIP_LEFT_RIGHT)
+            if label_img is not None:
+                label_img = label_img.transpose(Image.FLIP_LEFT_RIGHT)
             if depth_img is not None:
                 depth_img = depth_img.transpose(Image.FLIP_LEFT_RIGHT)
 
@@ -77,7 +80,9 @@ class RandomScale(object):
         random_scale = math.pow(2, rand_log_scale)
         new_size = (int(round(w * random_scale)), int(round(h * random_scale)))
         rgb_img = rgb_img.resize(new_size, Image.ANTIALIAS)
-        label_img = label_img.resize(new_size, Image.NEAREST)
+
+        if label_img is not None:
+            label_img = label_img.resize(new_size, Image.NEAREST)
 
         if depth_img is not None:
             depth_img = depth_img.resize(new_size, Image.BILINEAR)
@@ -113,13 +118,15 @@ class RandomCrop(object):
         pad_along_h = max(0, int((1 + self.crop_size[1] - h) / 2))
         # padd the images
         rgb_img = Pad(padding=(pad_along_w, pad_along_h), fill=0, padding_mode='constant')(rgb_img)
-        label_img = Pad(padding=(pad_along_w, pad_along_h), fill=self.ignore_idx, padding_mode='constant')(label_img)
+        if label_img is not None:
+            label_img = Pad(padding=(pad_along_w, pad_along_h), fill=self.ignore_idx, padding_mode='constant')(label_img)
         if depth_img is not None:
             depth_img = Pad(padding=(pad_along_w, pad_along_h), fill=0, padding_mode='constant')(depth_img)
 
         i, j, h, w = self.get_params(rgb_img, self.crop_size)
         rgb_img = F.crop(rgb_img, i, j, h, w)
-        label_img = F.crop(label_img, i, j, h, w)
+        if label_img is not None:
+            label_img = F.crop(label_img, i, j, h, w)
         if depth_img is not None:
             depth_img = F.crop(depth_img, i, j, h, w)
 
@@ -166,11 +173,13 @@ class RandomResizedCrop(object):
 
         i, j, h, w = self.get_params(rgb_img, crop_size)
         rgb_img = F.crop(rgb_img, i, j, h, w)
-        label_img = F.crop(label_img, i, j, h, w)
+        if label_img is not None:
+            label_img = F.crop(label_img, i, j, h, w)
         depth_img = F.crop(depth_img, i, j, h, w)
 
         rgb_img = rgb_img.resize(self.size, Image.ANTIALIAS)
-        label_img = label_img.resize(self.size, Image.NEAREST)
+        if label_img is not None:
+            label_img = label_img.resize(self.size, Image.NEAREST)
         depth_img = depth_img.resize(self.size, Image.BILINEAR)
 
         if depth_img is not None:
@@ -191,7 +200,9 @@ class Resize(object):
 
     def __call__(self, rgb_img, label_img, depth_img=None):
         rgb_img = rgb_img.resize(self.size, Image.BILINEAR)
-        label_img = label_img.resize(self.size, Image.NEAREST)
+        if label_img is not None:
+            label_img = label_img.resize(self.size, Image.NEAREST)
+
         if depth_img is not None:
             depth_img = depth_img.resize(self.size, Image.BILINEAR)
 
