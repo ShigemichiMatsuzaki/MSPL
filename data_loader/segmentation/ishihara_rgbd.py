@@ -7,6 +7,8 @@ from transforms.segmentation.data_transforms import RandomFlip, RandomCrop, Rand
 from collections import OrderedDict
 import numpy as np
 from torchvision.transforms import functional as F
+from itertools import product
+from random import random, gauss
 
 ISHIHARA_RGBD_CLASS_LIST = [
     'Unlabeled',
@@ -24,75 +26,75 @@ ISHIHARA_RGBD_CLASS_LIST = [
     'Traffic sign'
 ]
 
-class IshiharaRGBDSegmentation(data.Dataset):
-
-    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(400, 304), ignore_idx=255, coarse=True):
-
-        self.train = train
-        if self.train:
-            data_file = os.path.join(root, list_name)
-            if coarse:
-                coarse_data_file = os.path.join(root, list_name)
-        else:
-            data_file = os.path.join(root, list_name)
-
-        self.images = []
-        self.masks = []
-        with open(data_file, 'r') as lines:
-            for line in lines:
-                line_split = line.split(',')
-#                rgb_img_loc = root + os.sep + line_split[0].rstrip()
-                rgb_img_loc = line_split[0].rstrip()
-#                rgb_img_loc = root + os.sep + line_split[1].rstrip()
-                label_img_loc = line_split[1].rstrip()
-                assert os.path.isfile(rgb_img_loc)
-                assert os.path.isfile(label_img_loc)
-                self.images.append(rgb_img_loc)
-                self.masks.append(label_img_loc)
-
-        if isinstance(size, tuple):
-            self.size = size
-        else:
-            self.size = (size, size)
-
-        if isinstance(scale, tuple):
-            self.scale = scale
-        else:
-            self.scale = (scale, scale)
-
-        self.train_transforms, self.val_transforms = self.transforms()
-        self.ignore_idx = ignore_idx
-
-    def transforms(self):
-        train_transforms = Compose(
-            [
-                RandomScale(scale=self.scale),
-                RandomCrop(crop_size=self.size),
-                RandomFlip(),
-                Normalize()
-            ]
-        )
-        val_transforms = Compose(
-            [
-                Resize(size=self.size),
-                Normalize()
-            ]
-        )
-        return train_transforms, val_transforms
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, index):
-        rgb_img = Image.open(self.images[index]).convert('RGB')
-        label_img = Image.open(self.masks[index])
-
-        if self.train:
-            rgb_img, label_img = self.train_transforms(rgb_img, label_img)
-        else:
-            rgb_img, label_img = self.val_transforms(rgb_img, label_img)
-
-        return rgb_img, label_img
+#class IshiharaRGBDSegmentation(data.Dataset):
+#
+#    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(400, 304), ignore_idx=255, coarse=True):
+#
+#        self.train = train
+#        if self.train:
+#            data_file = os.path.join(root, list_name)
+#            if coarse:
+#                coarse_data_file = os.path.join(root, list_name)
+#        else:
+#            data_file = os.path.join(root, list_name)
+#
+#        self.images = []
+#        self.masks = []
+#        with open(data_file, 'r') as lines:
+#            for line in lines:
+#                line_split = line.split(',')
+##                rgb_img_loc = root + os.sep + line_split[0].rstrip()
+#                rgb_img_loc = line_split[0].rstrip()
+##                rgb_img_loc = root + os.sep + line_split[1].rstrip()
+#                label_img_loc = line_split[1].rstrip()
+#                assert os.path.isfile(rgb_img_loc)
+#                assert os.path.isfile(label_img_loc)
+#                self.images.append(rgb_img_loc)
+#                self.masks.append(label_img_loc)
+#
+#        if isinstance(size, tuple):
+#            self.size = size
+#        else:
+#            self.size = (size, size)
+#
+#        if isinstance(scale, tuple):
+#            self.scale = scale
+#        else:
+#            self.scale = (scale, scale)
+#
+#        self.train_transforms, self.val_transforms = self.transforms()
+#        self.ignore_idx = ignore_idx
+#
+#    def transforms(self):
+#        train_transforms = Compose(
+#            [
+#                RandomScale(scale=self.scale),
+#                RandomCrop(crop_size=self.size),
+#                RandomFlip(),
+#                Normalize()
+#            ]
+#        )
+#        val_transforms = Compose(
+#            [
+#                Resize(size=self.size),
+#                Normalize()
+#            ]
+#        )
+#        return train_transforms, val_transforms
+#
+#    def __len__(self):
+#        return len(self.images)
+#
+#    def __getitem__(self, index):
+#        rgb_img = Image.open(self.images[index]).convert('RGB')
+#        label_img = Image.open(self.masks[index])
+#
+#        if self.train:
+#            rgb_img, label_img = self.train_transforms(rgb_img, label_img)
+#        else:
+#            rgb_img, label_img = self.val_transforms(rgb_img, label_img)
+#
+#        return rgb_img, label_img
 
 class IshiharaRGBDSegmentation(data.Dataset):
 
@@ -176,6 +178,12 @@ class IshiharaRGBDSegmentation(data.Dataset):
             #print(cv_depth)
             #print(np.histogram(cv_depth, bins=10))
             depth_img = Image.fromarray(cv_depth)
+            depth_w, depth_h = depth_img.size
+            depth_img = depth_img.resize((depth_w//3, depth_h//3))
+            noise = Noise()
+            depth_img = noise.saltpepper(depth_img)
+            depth_img = noise.gaussian(depth_img)
+            depth_img = depth_img.resize((depth_w, depth_h))
 #            print(np.asarray(rgb_img))
            
 
@@ -272,3 +280,44 @@ class IshiharaDepth(data.Dataset):
         rgb_img, _, depth_img = self.train_transforms(rgb_img, rgb_img, depth_img) # Second arg is a dummy
 
         return F.to_tensor(rgb_img), F.to_tensor(depth_img)
+
+class Noise:
+    def __init__(self):
+        pass
+#        self.input_image = input_image
+#        self.input_pix = self.input_image.load()
+#        self.w, self.h = self.input_image.size
+
+    def saltpepper(self, input_image, salt=0.05, pepper=0.05):
+        input_pix = input_image.load()
+        w, h = input_image.size
+
+        output_image = Image.new("L", input_image.size)
+        output_pix = output_image.load()
+      
+        for x, y in product(*map(range, (w, h))):
+            r = random()
+            if r < salt:
+                output_pix[x, y] = 0
+            elif r > 1 - pepper:
+                output_pix[x, y] = 0
+            else:
+                output_pix[x, y] = input_pix[x, y]
+
+        return output_image
+
+    def gaussian(self, input_image, amp=5):
+        input_pix = input_image.load()
+        w, h = input_image.size
+
+        output_image = Image.new("L", input_image.size)
+        output_pix = output_image.load()
+
+        for x, y in product(*map(range, (w, h))):
+            noised_colors = gauss(input_pix[x, y], amp)
+            noised_colors = max(0, noised_colors)
+            noised_colors = min(255, noised_colors)
+#            noised_colors = tuple(map(int, noised_colors))
+            output_pix[x, y] = int(noised_colors)
+
+        return output_image
