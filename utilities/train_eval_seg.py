@@ -31,11 +31,14 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
             outputs = model(inputs)
 
         if device == 'cuda':
+            pass
+#
             loss = criterion(outputs, target).mean()
             if isinstance(outputs, (list, tuple)):
                 target_dev = outputs[0].device
                 outputs = gather(outputs, target_device=target_dev)
         else:
+            pass
             loss = criterion(outputs, target)
 
         inter, union = miou_class.get_iou(outputs, target)
@@ -61,8 +64,8 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
 
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
     miou = iou.mean() * 100
-    return miou, losses.avg
 
+    return miou, losses.avg
 
 def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda', use_depth=False):
     model.eval()

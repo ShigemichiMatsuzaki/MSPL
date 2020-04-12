@@ -112,6 +112,33 @@ def main(args):
             ('Wall', (102,102,156)),
             ('Traffic ', (220,220,  0)) 
         ])
+    elif args.dataset == 'sun':
+        print(args.use_depth)
+        from data_loader.segmentation.sun_rgbd import SUNRGBDSegmentation, SUN_RGBD_CLASS_LIST
+        train_dataset = SUNRGBDSegmentation(root=args.data_path, list_name='sun_rgbd_train.txt', train=True, size=crop_size, ignore_idx=args.ignore_idx, scale=args.scale, use_depth=args.use_depth)
+        val_dataset = SUNRGBDSegmentation(root=args.data_path, list_name='sun_rgbd_val.txt', train=False, size=crop_size, ignore_idx=args.ignore_idx, scale=args.scale, use_depth=args.use_depth)
+
+        seg_classes = len(SUN_RGBD_CLASS_LIST)
+
+        class_wts = torch.ones(seg_classes)
+
+        color_encoding = OrderedDict([
+            ('Background', ( 0,  0,  0)),
+            ('Bed', ( 0,  255,  0)),
+            ('Books', ( 70, 70, 70)), 
+            ('Ceiling', (190,153,153)),
+            ('Chair', ( 72,  0, 90)),
+            ('Floor', (220, 20, 60)),
+            ('Furniture', (153,153,153)), 
+            ('Objects', (157,234, 50)),
+            ('Picture', (128, 64,128)), 
+            ('Sofa', (244, 35,232)),
+            ('Table', (107,142, 35)),
+            ('TV', (  0,  0,255)),
+            ('Wall', (102,102,156)),
+            ('Window', (220,220,  0))
+        ])
+
     else:
         print_error_message('Dataset: {} not yet supported'.format(args.dataset))
         exit(-1)
@@ -126,6 +153,7 @@ def main(args):
     elif args.model == 'espdnet':
         from model.segmentation.espdnet import espdnet_seg
         args.classes = seg_classes
+        print("Trainable fusion : {}".format(args.trainable_fusion))
         model = espdnet_seg(args)
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
@@ -254,8 +282,6 @@ def main(args):
         arg_dict['flops'] = '{} '.format(flops)
         json.dump(arg_dict, outfile)
 
-
-
     extra_info_ckpt = '{}_{}_{}'.format(args.model, args.s, crop_size[0])
     for epoch in range(start_epoch, args.epochs):
         lr_base = lr_scheduler.step(epoch)
@@ -275,10 +301,12 @@ def main(args):
         batch = iter(val_loader).next()
         if args.use_depth:
             in_training_visualization_img(model, images=batch[0].to(device=device), depths=batch[2].to(device=device), labels=batch[1].to(device=device), class_encoding=color_encoding, writer=writer, epoch=epoch, data='Segmentation', device=device)
+
+            image_grid = torchvision.utils.make_grid(batch[2].to(device=device).data.cpu()).numpy()
+            print(type(image_grid))
+            writer.add_image('Segmentation/depths', image_grid, epoch)
         else:
             in_training_visualization_img(model, images=batch[0].to(device=device), labels=batch[1].to(device=device), class_encoding=color_encoding, writer=writer, epoch=epoch, data='Segmentation', device=device)
-
-
 
 #            image_grid = torchvision.utils.make_grid(outputs.data.cpu()).numpy()
 #            writer.add_image('Segmentation/results/val', image_grid, epoch)
@@ -363,6 +391,7 @@ if __name__ == "__main__":
     parser.add_argument('--model-width', default=224, type=int, help='Model width')
     parser.add_argument('--model-height', default=224, type=int, help='Model height')
     parser.add_argument('--use-depth', default=False, type=bool, help='Use depth')
+    parser.add_argument('--trainable-fusion', default=False, type=bool, help='Use depth')
 
     args = parser.parse_args()
 
@@ -384,6 +413,8 @@ if __name__ == "__main__":
     elif args.dataset == 'greenhouse':
         args.scale = (0.5, 2.0)
     elif args.dataset == 'ishihara':
+        args.scale = (0.5, 2.0)
+    elif args.dataset == 'sun':
         args.scale = (0.5, 2.0)
     else:
         print_error_message('{} dataset not yet supported'.format(args.dataset))

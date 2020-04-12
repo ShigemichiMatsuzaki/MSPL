@@ -17,7 +17,7 @@ class FusionGate(nn.Module):
     '''
     Gate to fuse RGB and depth features
     '''
-    def __init__(self, nchannel):
+    def __init__(self, nchannel, is_trainable=True):
         super().__init__()
 
         # Channel size of input features (must be the same)
@@ -25,25 +25,31 @@ class FusionGate(nn.Module):
 
         self.conv_1x1 = C(nIn=2 * self.nchannel, nOut=self.nchannel, kSize=1)
         self.sigmoid  = torch.nn.Sigmoid()
+
+        self.is_trainable = is_trainable
         
     def forward(self, rgb, depth):
-        # print(rgb.size())
-        # print(depth.size())
-        # 1. Concat RGB and depth features
-        output = torch.cat((rgb, depth), 1)
+        if self.is_trainable:
+          # print(rgb.size())
+          # print(depth.size())
+          # 1. Concat RGB and depth features
+          output = torch.cat((rgb, depth), 1)
+  
+          # 2. 1x1 convolution
+          output = self.conv_1x1(output)
+  
+          # 3. Sigmoid
+          weight = self.sigmoid(output)
+  
+          # 4. Multiply each features by the yielded weights
+          size = weight.size()
+          w_rgb = rgb * weight
+          w_depth = depth * (torch.ones(size).to('cuda') - weight)
+  
+          output = w_rgb + w_depth
 
-        # 2. 1x1 convolution
-        output = self.conv_1x1(output)
-
-        # 3. Sigmoid
-        weight = self.sigmoid(output)
-
-        # 4. Multiply each features by the yielded weights
-        size = weight.size()
-        w_rgb = rgb * weight
-        w_depth = depth * (torch.ones(size).to('cuda') - weight)
-
-        output = w_rgb + w_depth
+        else:
+          output = rgb + depth
 
         return output
 
@@ -52,7 +58,7 @@ class ESPDNetSegmentation(nn.Module):
     This class defines the ESPDNet architecture for the Semantic Segmenation
     '''
 
-    def __init__(self, args, classes=21, dataset='pascal', dense_fuse=False):
+    def __init__(self, args, classes=21, dataset='pascal', dense_fuse=False, trainable_fusion=True):
         super().__init__()
 
         # =============================================================
@@ -77,10 +83,10 @@ class ESPDNetSegmentation(nn.Module):
         del self.depth_base_net.level5_0
         config = self.depth_base_net.config
 
-        self.fusion_gate_level1 = FusionGate(nchannel=32)
-        self.fusion_gate_level2 = FusionGate(nchannel=128)
-        self.fusion_gate_level3 = FusionGate(nchannel=256)
-        self.fusion_gate_level4 = FusionGate(nchannel=512)
+        self.fusion_gate_level1 = FusionGate(nchannel=32, is_trainable=trainable_fusion)
+        self.fusion_gate_level2 = FusionGate(nchannel=128, is_trainable=trainable_fusion)
+        self.fusion_gate_level3 = FusionGate(nchannel=256, is_trainable=trainable_fusion)
+        self.fusion_gate_level4 = FusionGate(nchannel=512, is_trainable=trainable_fusion)
 
         # Layer 1
 #        self.depth_encoder_level1 = nn.Sequential(
@@ -127,7 +133,8 @@ class ESPDNetSegmentation(nn.Module):
             'city': 16,
             'coco': 32,
             'greenhouse': 16,
-            'ishihara': 16
+            'ishihara': 16,
+            'sun': 16
         }
         base_dec_planes = dec_feat_dict[dataset]
         dec_planes = [4*base_dec_planes, 3*base_dec_planes, 2*base_dec_planes, classes]
@@ -342,7 +349,8 @@ def espdnet_seg(args):
     #depth_weights = 'results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200401-114045/espnetv2_2.0_480_checkpoint.pth.tar'
     depth_weights = weights
     dataset=args.dataset
-    model = ESPDNetSegmentation(args, classes=classes, dataset=dataset)
+    trainable_fusion=args.trainable_fusion
+    model = ESPDNetSegmentation(args, classes=classes, dataset=dataset, trainable_fusion=trainable_fusion)
     if weights:
         import os
         if os.path.isfile(weights):
