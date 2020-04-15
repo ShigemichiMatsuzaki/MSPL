@@ -17,7 +17,7 @@ class FusionGate(nn.Module):
     '''
     Gate to fuse RGB and depth features
     '''
-    def __init__(self, nchannel, is_trainable=True):
+    def __init__(self, nchannel):
         super().__init__()
 
         # Channel size of input features (must be the same)
@@ -25,40 +25,35 @@ class FusionGate(nn.Module):
 
         self.conv_1x1 = C(nIn=2 * self.nchannel, nOut=self.nchannel, kSize=1)
         self.sigmoid  = torch.nn.Sigmoid()
-
-        self.is_trainable = is_trainable
         
-    def forward(self, rgb, depth):
-        if self.is_trainable:
-          # print(rgb.size())
-          # print(depth.size())
-          # 1. Concat RGB and depth features
-          output = torch.cat((rgb, depth), 1)
-  
-          # 2. 1x1 convolution
-          output = self.conv_1x1(output)
-  
-          # 3. Sigmoid
-          weight = self.sigmoid(output)
-  
-          # 4. Multiply each features by the yielded weights
-          size = weight.size()
-          w_rgb = rgb * weight
-          w_depth = depth * (torch.ones(size).to('cuda') - weight)
-  
-          output = w_rgb + w_depth
-
+    def forward(self, rgb, depth, naive_fuse=False):
+        if naive_fuse:
+            output = rgb + depth
         else:
-          output = rgb + depth
+            # 1. Concat RGB and depth features
+            output = torch.cat((rgb, depth), 1)
+    
+            # 2. 1x1 convolution
+            output = self.conv_1x1(output)
+    
+            # 3. Sigmoid
+            weight = self.sigmoid(output)
+    
+            # 4. Multiply each features by the yielded weights
+            size = weight.size()
+            w_rgb = rgb * weight
+            w_depth = depth * (torch.ones(size).to('cuda') - weight)
+    
+            output = w_rgb + w_depth
 
         return output
 
-class ESPDNetSegmentation(nn.Module):
+class ESPDNetSegCls(nn.Module):
     '''
-    This class defines the ESPDNet architecture for the Semantic Segmenation
+    This class defines the ESPDNet architecture for the multi task training of Semantic Segmenation and classification
     '''
 
-    def __init__(self, args, classes=21, dataset='pascal', dense_fuse=False, trainable_fusion=True):
+    def __init__(self, args, seg_classes=5, cls_classes=5, dataset='greenhouse', dense_fuse=False, naive_fuse=False):
         super().__init__()
 
         # =============================================================
@@ -67,10 +62,11 @@ class ESPDNetSegmentation(nn.Module):
         #
         # RGB
         #
+        args.num_classes = cls_classes
         self.base_net = EESPNet(args) #imagenet model
-        del self.base_net.classifier
-        del self.base_net.level5
-        del self.base_net.level5_0
+#        del self.base_net.classifier
+#        del self.base_net.level5
+#        del self.base_net.level5_0
         config = self.base_net.config
 
         #
@@ -83,10 +79,10 @@ class ESPDNetSegmentation(nn.Module):
         del self.depth_base_net.level5_0
         config = self.depth_base_net.config
 
-        self.fusion_gate_level1 = FusionGate(nchannel=32, is_trainable=trainable_fusion)
-        self.fusion_gate_level2 = FusionGate(nchannel=128, is_trainable=trainable_fusion)
-        self.fusion_gate_level3 = FusionGate(nchannel=256, is_trainable=trainable_fusion)
-        self.fusion_gate_level4 = FusionGate(nchannel=512, is_trainable=trainable_fusion)
+        self.fusion_gate_level1 = FusionGate(nchannel=32)
+        self.fusion_gate_level2 = FusionGate(nchannel=128)
+        self.fusion_gate_level3 = FusionGate(nchannel=256)
+        self.fusion_gate_level4 = FusionGate(nchannel=512)
 
         # Layer 1
 #        self.depth_encoder_level1 = nn.Sequential(
@@ -133,12 +129,11 @@ class ESPDNetSegmentation(nn.Module):
             'city': 16,
             'coco': 32,
             'greenhouse': 16,
-            'ishihara': 16,
-            'sun': 16
+            'ishihara': 16
         }
         base_dec_planes = dec_feat_dict[dataset]
-        dec_planes = [4*base_dec_planes, 3*base_dec_planes, 2*base_dec_planes, classes]
-        pyr_plane_proj = min(classes //2, base_dec_planes)
+        dec_planes = [4*base_dec_planes, 3*base_dec_planes, 2*base_dec_planes, seg_classes]
+        pyr_plane_proj = min(seg_classes //2, base_dec_planes)
 
         self.bu_dec_l1 = EfficientPyrPool(in_planes=config[3], proj_planes=pyr_plane_proj,
                                           out_planes=dec_planes[0])
@@ -167,6 +162,7 @@ class ESPDNetSegmentation(nn.Module):
 
         self.init_params()
         self.dense_fuse = dense_fuse
+        self.naive_fuse = naive_fuse
 
     def upsample(self, x):
         return F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
@@ -239,7 +235,7 @@ class ESPDNetSegmentation(nn.Module):
     
             # Fusion level 1
             # enc_out_l1 += d_enc_out_l1
-            enc_out_l1 = self.fusion_gate_level1(enc_out_l1, d_enc_out_l1)
+            enc_out_l1 = self.fusion_gate_level1(enc_out_l1, d_enc_out_l1, self.naive_fuse)
 
         # 
         # Second layer (Strided EESP)
@@ -250,7 +246,7 @@ class ESPDNetSegmentation(nn.Module):
     
             # Fusion level 2
             # enc_out_l2 += d_enc_out_l2
-            enc_out_l2 = self.fusion_gate_level2(enc_out_l2, d_enc_out_l2)
+            enc_out_l2 = self.fusion_gate_level2(enc_out_l2, d_enc_out_l2, self.naive_fuse)
 
         # 
         # Third layer 1 (Strided EESP)
@@ -268,19 +264,19 @@ class ESPDNetSegmentation(nn.Module):
                     d_enc_out_l3 = dlayer(d_enc_out_l3_0)
                     if self.dense_fuse:
                         # enc_out_l3 += d_enc_out_l3
-                        enc_out_l3 = self.fusion_gate_level3(enc_out_l3, d_enc_out_l3)
+                        enc_out_l3 = self.fusion_gate_level3(enc_out_l3, d_enc_out_l3, self.naive_fuse)
             else:
                 enc_out_l3 = dlayer(enc_out_l3)
                 if x_d is not None: 
                     d_enc_out_l3 = dlayer(d_enc_out_l3)
                     if self.dense_fuse:
                         # enc_out_l3 += d_enc_out_l3
-                        enc_out_l3 = self.fusion_gate_level3(enc_out_l3, d_enc_out_l3)
+                        enc_out_l3 = self.fusion_gate_level3(enc_out_l3, d_enc_out_l3, self.naive_fuse)
 
         if x_d is not None and not self.dense_fuse:
             # Fusion level 3
             # enc_out_l3 += d_enc_out_l3
-            enc_out_l3 = self.fusion_gate_level3(enc_out_l3, d_enc_out_l3)
+            enc_out_l3 = self.fusion_gate_level3(enc_out_l3, d_enc_out_l3, self.naive_fuse)
 
         # 
         # Forth layer 1 (Strided EESP)
@@ -288,6 +284,7 @@ class ESPDNetSegmentation(nn.Module):
         enc_out_l4_0 = self.base_net.level4_0(enc_out_l3, x)  # down-sample -> 14
         if x_d is not None: 
             d_enc_out_l4_0 = self.depth_base_net.level4_0(d_enc_out_l3)  # down-sample -> 14
+
         # 
         # EESP
         #
@@ -298,22 +295,36 @@ class ESPDNetSegmentation(nn.Module):
                     d_enc_out_l4 = dlayer(d_enc_out_l4_0)
                     if self.dense_fuse:
                         # enc_out_l4 += d_enc_out_l4
-                        enc_out_l4 = self.fusion_gate_level4(enc_out_l4, d_enc_out_l4)
+                        enc_out_l4 = self.fusion_gate_level4(enc_out_l4, d_enc_out_l4, self.naive_fuse)
             else:
                 enc_out_l4 = layer(enc_out_l4)
                 if x_d is not None: 
                     d_enc_out_l4 = dlayer(d_enc_out_l4)
                     if self.dense_fuse:
                         # enc_out_l4 += d_enc_out_l4
-                        enc_out_l4 = self.fusion_gate_level4(enc_out_l4, d_enc_out_l4)
+                        enc_out_l4 = self.fusion_gate_level4(enc_out_l4, d_enc_out_l4, self.naive_fuse)
 
         if x_d is not None and not self.dense_fuse:
             # Fusion level 4
             # enc_out_l4 += d_enc_out_l4
-            enc_out_l4 = self.fusion_gate_level4(enc_out_l4, d_enc_out_l4)
+            enc_out_l4 = self.fusion_gate_level4(enc_out_l4, d_enc_out_l4, self.naive_fuse)
 
+        #
+        # Classification branch
+        out_l5_0 = self.base_net.level5_0(enc_out_l4)  # down-sample
+        for i, layer in enumerate(self.base_net.level5):
+            if i == 0:
+                out_l5 = layer(out_l5_0)
+            else:
+                out_l5 = layer(out_l5)
 
-        # *** 5th layer is for and classification and removed for segmentation ***
+        output_g = F.adaptive_avg_pool2d(out_l5, output_size=1)
+        output_g = F.dropout(output_g, p=0.2, training=self.training)
+        output_1x1 = output_g.view(output_g.size(0), -1)
+
+        #
+        # Decoder
+        #
 
         # bottom-up decoding
         bu_out = self.bu_dec_l1(enc_out_l4)
@@ -339,19 +350,18 @@ class ESPDNetSegmentation(nn.Module):
         bu_out = self.bu_br_l4(bu_out)
         bu_out  = self.bu_dec_l4(bu_out)
 
-        return F.interpolate(bu_out, size=x_size, mode='bilinear', align_corners=True)
+        # Segmentation output and classification output
+        return F.interpolate(bu_out, size=x_size, mode='bilinear', align_corners=True), self.base_net.classifier(output_1x1)
 
-
-def espdnet_seg(args):
+def espdnet_mult(args):
     classes = args.classes
+    cls_classes = args.cls_classes
     scale=args.s
     weights = args.weights
     #depth_weights = 'results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200401-114045/espnetv2_2.0_480_checkpoint.pth.tar'
     depth_weights = weights
     dataset=args.dataset
-    trainable_fusion=args.trainable_fusion
-    dense_fuse=args.dense_fuse
-    model = ESPDNetSegmentation(args, classes=classes, dataset=dataset, dense_fuse=dense_fuse, trainable_fusion=trainable_fusion)
+    model = ESPDNetSegCls(args, seg_classes=classes, cls_classes=cls_classes, dataset=dataset)
     if weights:
         import os
         if os.path.isfile(weights):
@@ -366,7 +376,7 @@ def espdnet_seg(args):
         # Load pretrained weights for RGB
         basenet_dict = model.base_net.state_dict()
         model_dict = model.state_dict()
-        overlap_dict = {k: v for k, v in pretrained_dict.items() if k in basenet_dict}
+        overlap_dict = {k: v for k, v in pretrained_dict.items() if k in basenet_dict and k != 'classifier.bias' and k != 'classifier.weight'}
 
         if len(overlap_dict) == 0:
             print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
@@ -395,7 +405,8 @@ def espdnet_seg(args):
 #        print(list(pretrained_dict['state_dict'].keys())[0].lstrip('base_net.base_net.'))
 #        print(list(dbasenet_dict.keys())[0])
 #        overlap_dict = {k.lstrip("base_net.base_net."): v for k, v in pretrained_dict['state_dict'].items() if k.lstrip('base_net.base_net.') in dbasenet_dict and k.lstrip("base_net.base_net.") != 'level1.conv.weight'}
-        overlap_dict = {k: v for k, v in pretrained_dict.items() if k in dbasenet_dict}
+        overlap_dict = {k: v for k, v in pretrained_dict.items() if k in dbasenet_dict} # and k != 'classifier.bias' and k != 'classifier.weight'}
+
         # overlap_dict = {k.lstrip("base_net.base_net."): v for k, v in pretrained_dict['state_dict'].items() if k.lstrip('base_net.base_net.') in dbasenet_dict}
 
 #        for k, v in pretrained_dict['state_dict'].items():

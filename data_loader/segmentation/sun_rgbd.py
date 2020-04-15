@@ -10,93 +10,24 @@ from torchvision.transforms import functional as F
 from itertools import product
 from random import random, gauss
 
-ISHIHARA_RGBD_CLASS_LIST = [
-    'Unlabeled',
-    'Building',
-    'Fence',
-    'Others',
-    'Pedestrian',
-    'Pole',
-    'Road line',
-    'Road',
-    'Sidewalk',
-    'Vegetation',
-    'Car',
+SUN_RGBD_CLASS_LIST = [
+    'Background',
+    'Bed',
+    'Books',
+    'Ceiling',
+    'Chair',
+    'Floor',
+    'Furniture',
+    'Objects',
+    'Picture',
+    'Sofa',
+    'Table',
+    'TV',
     'Wall',
-    'Traffic sign'
+    'Window'
 ]
 
-#class IshiharaRGBDSegmentation(data.Dataset):
-#
-#    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(400, 304), ignore_idx=255, coarse=True):
-#
-#        self.train = train
-#        if self.train:
-#            data_file = os.path.join(root, list_name)
-#            if coarse:
-#                coarse_data_file = os.path.join(root, list_name)
-#        else:
-#            data_file = os.path.join(root, list_name)
-#
-#        self.images = []
-#        self.masks = []
-#        with open(data_file, 'r') as lines:
-#            for line in lines:
-#                line_split = line.split(',')
-##                rgb_img_loc = root + os.sep + line_split[0].rstrip()
-#                rgb_img_loc = line_split[0].rstrip()
-##                rgb_img_loc = root + os.sep + line_split[1].rstrip()
-#                label_img_loc = line_split[1].rstrip()
-#                assert os.path.isfile(rgb_img_loc)
-#                assert os.path.isfile(label_img_loc)
-#                self.images.append(rgb_img_loc)
-#                self.masks.append(label_img_loc)
-#
-#        if isinstance(size, tuple):
-#            self.size = size
-#        else:
-#            self.size = (size, size)
-#
-#        if isinstance(scale, tuple):
-#            self.scale = scale
-#        else:
-#            self.scale = (scale, scale)
-#
-#        self.train_transforms, self.val_transforms = self.transforms()
-#        self.ignore_idx = ignore_idx
-#
-#    def transforms(self):
-#        train_transforms = Compose(
-#            [
-#                RandomScale(scale=self.scale),
-#                RandomCrop(crop_size=self.size),
-#                RandomFlip(),
-#                Normalize()
-#            ]
-#        )
-#        val_transforms = Compose(
-#            [
-#                Resize(size=self.size),
-#                Normalize()
-#            ]
-#        )
-#        return train_transforms, val_transforms
-#
-#    def __len__(self):
-#        return len(self.images)
-#
-#    def __getitem__(self, index):
-#        rgb_img = Image.open(self.images[index]).convert('RGB')
-#        label_img = Image.open(self.masks[index])
-#
-#        if self.train:
-#            rgb_img, label_img = self.train_transforms(rgb_img, label_img)
-#        else:
-#            rgb_img, label_img = self.val_transforms(rgb_img, label_img)
-#
-#        return rgb_img, label_img
-
-class IshiharaRGBDSegmentation(data.Dataset):
+class SUNRGBDSegmentation(data.Dataset):
 
     def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(400, 304), ignore_idx=255, use_depth=True):
 
@@ -167,6 +98,7 @@ class IshiharaRGBDSegmentation(data.Dataset):
     def __getitem__(self, index):
         rgb_img = Image.open(self.images[index]).convert('RGB')
         label_img = Image.open(self.masks[index])
+
         '''
         Open a depth image using OpenCV instead of PIL to deal with int16 format of the image
         '''
@@ -178,14 +110,6 @@ class IshiharaRGBDSegmentation(data.Dataset):
             #print(cv_depth)
             #print(np.histogram(cv_depth, bins=10))
             depth_img = Image.fromarray(cv_depth)
-            depth_w, depth_h = depth_img.size
-            depth_img = depth_img.resize((depth_w//3, depth_h//3))
-            noise = Noise()
-            depth_img = noise.saltpepper(depth_img)
-            depth_img = noise.gaussian(depth_img)
-            depth_img = depth_img.resize((depth_w, depth_h))
-#            print(np.asarray(rgb_img))
-           
 
         if self.train:
             if self.use_depth:
@@ -203,7 +127,7 @@ class IshiharaRGBDSegmentation(data.Dataset):
         else:
             return rgb_img, label_img
 
-class IshiharaDepth(data.Dataset):
+class SUNDepth(data.Dataset):
 
     def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 264), use_filter=True):
 

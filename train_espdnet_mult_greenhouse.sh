@@ -1,0 +1,13 @@
+CUDA_VISIBLE_DEVICES=0 python train_seg_cls.py \
+  --dataset greenhouse \
+  --data-path ./vision_datasets/greenhouse/ \
+  --batch-size 20 \
+  --crop-size 480 256 \
+  --ignore-idx 4 \
+  --model espdnet \
+  --s 2.0 \
+  --lr 0.009 \
+  --scheduler hybrid \
+  --clr-max 61 \
+  --use-depth true \
+  --epochs 500

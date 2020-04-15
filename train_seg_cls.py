@@ -10,9 +10,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
-from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img
-from utilities.train_eval_seg import train_seg as train
-from utilities.train_eval_seg import val_seg as val
+from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_2, calc_cls_class_weight
+from utilities.train_eval_mult import train_seg_cls as train
+from utilities.train_eval_mult import val_seg_cls as val
 # from torch.utils.tensorboard import SummaryWriter
 from tensorboardX import SummaryWriter
 from loss_fns.segmentation_loss import SegmentationLoss
@@ -34,47 +34,11 @@ def main(args):
     num_gpus = torch.cuda.device_count()
     device = 'cuda' if num_gpus > 0 else 'cpu'
 
-    if args.dataset == 'pascal':
-        from data_loader.segmentation.voc import VOCSegmentation, VOC_CLASS_LIST
-        train_dataset = VOCSegmentation(root=args.data_path, train=True, crop_size=crop_size, scale=args.scale,
-                                        coco_root_dir=args.coco_path)
-        val_dataset = VOCSegmentation(root=args.data_path, train=False, crop_size=crop_size, scale=args.scale)
-        seg_classes = len(VOC_CLASS_LIST)
-        class_wts = torch.ones(seg_classes)
-    elif args.dataset == 'city':
-        from data_loader.segmentation.cityscapes import CityscapesSegmentation, CITYSCAPE_CLASS_LIST
-        train_dataset = CityscapesSegmentation(root=args.data_path, train=True, size=crop_size, scale=args.scale,
-                                               coarse=args.coarse)
-        val_dataset = CityscapesSegmentation(root=args.data_path, train=False, size=crop_size, scale=args.scale,
-                                             coarse=False)
-        seg_classes = len(CITYSCAPE_CLASS_LIST)
-        class_wts = torch.ones(seg_classes)
-        class_wts[0] = 2.8149201869965
-        class_wts[1] = 6.9850029945374
-        class_wts[2] = 3.7890393733978
-        class_wts[3] = 9.9428062438965
-        class_wts[4] = 9.7702074050903
-        class_wts[5] = 9.5110931396484
-        class_wts[6] = 10.311357498169
-        class_wts[7] = 10.026463508606
-        class_wts[8] = 4.6323022842407
-        class_wts[9] = 9.5608062744141
-        class_wts[10] = 7.8698215484619
-        class_wts[11] = 9.5168733596802
-        class_wts[12] = 10.373730659485
-        class_wts[13] = 6.6616044044495
-        class_wts[14] = 10.260489463806
-        class_wts[15] = 10.287888526917
-        class_wts[16] = 10.289801597595
-        class_wts[17] = 10.405355453491
-        class_wts[18] = 10.138095855713
-        class_wts[19] = 0.0
-
-    elif args.dataset == 'greenhouse':
+    if args.dataset == 'greenhouse':
         print(args.use_depth)
-        from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
-        train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
-        val_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='val_greenhouse.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+        from data_loader.segmentation.greenhouse import GreenhouseRGBDSegCls, GREENHOUSE_CLASS_LIST
+        train_dataset = GreenhouseRGBDSegCls(root=args.data_path, list_name='train_greenhouse_mult.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+        val_dataset = GreenhouseRGBDSegCls(root=args.data_path, list_name='val_greenhouse_mult.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
         class_weights = np.load('class_weights.npy')[:4]
         print(class_weights)
         class_wts = torch.from_numpy(class_weights).float().to(device)
@@ -87,58 +51,6 @@ def main(args):
             ('ground', (255, 255, 0)),
             ('background', (0, 0, 0))
         ])
-    elif args.dataset == 'ishihara':
-        print(args.use_depth)
-        from data_loader.segmentation.ishihara_rgbd import IshiharaRGBDSegmentation, ISHIHARA_RGBD_CLASS_LIST
-        train_dataset = IshiharaRGBDSegmentation(root=args.data_path, list_name='ishihara_rgbd_train.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
-        val_dataset = IshiharaRGBDSegmentation(root=args.data_path, list_name='ishihara_rgbd_val.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
-
-        seg_classes = len(ISHIHARA_RGBD_CLASS_LIST)
-
-        class_wts = torch.ones(seg_classes)
-
-        color_encoding = OrderedDict([
-            ('Unlabeled', (  0,  0,  0)),
-            ('Building', ( 70, 70, 70)), 
-            ('Fence', (190,153,153)),
-            ('Others', ( 72,  0, 90)),
-            ('Pedestrian', (220, 20, 60)),
-            ('Pole', (153,153,153)), 
-            ('Road ', (157,234, 50)),
-            ('Road', (128, 64,128)), 
-            ('Sidewalk', (244, 35,232)),
-            ('Vegetation', (107,142, 35)),
-            ('Car', (  0,  0,255)),
-            ('Wall', (102,102,156)),
-            ('Traffic ', (220,220,  0)) 
-        ])
-    elif args.dataset == 'sun':
-        print(args.use_depth)
-        from data_loader.segmentation.sun_rgbd import SUNRGBDSegmentation, SUN_RGBD_CLASS_LIST
-        train_dataset = SUNRGBDSegmentation(root=args.data_path, list_name='sun_rgbd_train.txt', train=True, size=crop_size, ignore_idx=args.ignore_idx, scale=args.scale, use_depth=args.use_depth)
-        val_dataset = SUNRGBDSegmentation(root=args.data_path, list_name='sun_rgbd_val.txt', train=False, size=crop_size, ignore_idx=args.ignore_idx, scale=args.scale, use_depth=args.use_depth)
-
-        seg_classes = len(SUN_RGBD_CLASS_LIST)
-
-        class_wts = torch.ones(seg_classes)
-
-        color_encoding = OrderedDict([
-            ('Background', ( 0,  0,  0)),
-            ('Bed', ( 0,  255,  0)),
-            ('Books', ( 70, 70, 70)), 
-            ('Ceiling', (190,153,153)),
-            ('Chair', ( 72,  0, 90)),
-            ('Floor', (220, 20, 60)),
-            ('Furniture', (153,153,153)), 
-            ('Objects', (157,234, 50)),
-            ('Picture', (128, 64,128)), 
-            ('Sofa', (244, 35,232)),
-            ('Table', (107,142, 35)),
-            ('TV', (  0,  0,255)),
-            ('Wall', (102,102,156)),
-            ('Window', (220,220,  0))
-        ])
-
     else:
         print_error_message('Dataset: {} not yet supported'.format(args.dataset))
         exit(-1)
@@ -146,18 +58,11 @@ def main(args):
     print_info_message('Training samples: {}'.format(len(train_dataset)))
     print_info_message('Validation samples: {}'.format(len(val_dataset)))
 
-    if args.model == 'espnetv2':
-        from model.segmentation.espnetv2 import espnetv2_seg
+    if args.model == 'espdnet':
+        from model.segmentation.espdnet_mult import espdnet_mult
         args.classes = seg_classes
-        model = espnetv2_seg(args)
-    elif args.model == 'espdnet':
-        from model.segmentation.espdnet import espdnet_seg
-        args.classes = seg_classes
-        print("Trainable fusion : {}".format(args.trainable_fusion))
-        model = espdnet_seg(args)
-    elif args.model == 'dicenet':
-        from model.segmentation.dicenet import dicenet_seg
-        model = dicenet_seg(args, classes=seg_classes)
+        args.cls_classes = 5
+        model = espdnet_mult(args)
     else:
         print_error_message('Arch: {} not yet supported'.format(args.model))
         exit(-1)
@@ -219,10 +124,20 @@ def main(args):
 
     print('device : ' + device)
 
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
+                                               pin_memory=True, num_workers=args.workers)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
+                                             pin_memory=True, num_workers=args.workers)
+
+    cls_class_weight = calc_cls_class_weight(train_loader, 5)
+    print(cls_class_weight)
+
     #criterion = nn.CrossEntropyLoss(weight=class_wts, reduction='none', ignore_index=args.ignore_idx)
-    criterion = SegmentationLoss(n_classes=seg_classes, loss_type=args.loss_type,
-                                 device=device, ignore_idx=args.ignore_idx,
-                                 class_wts=class_wts.to(device))
+    criterion_seg = SegmentationLoss(n_classes=seg_classes, loss_type=args.loss_type,
+                                    device=device, ignore_idx=args.ignore_idx,
+                                    class_wts=class_wts.to(device))
+
+    criterion_cls = nn.CrossEntropyLoss(weight=torch.from_numpy(cls_class_weight).float().to(device))
 
     if num_gpus >= 1:
         if num_gpus == 1:
@@ -231,23 +146,20 @@ def main(args):
             from torch.nn.parallel import DataParallel
             model = DataParallel(model)
             model = model.cuda()
-            criterion = criterion.cuda()
+            criterion_seg = criterion_seg.cuda()
         else:
             from utilities.parallel_wrapper import DataParallelModel, DataParallelCriteria
             model = DataParallelModel(model)
             model = model.cuda()
-            criterion = DataParallelCriteria(criterion)
-            criterion = criterion.cuda()
+            criterion_seg = DataParallelCriteria(criterion_seg)
+            criterion_seg = criterion_seg.cuda()
+
+        criterion_cls = criterion_cls.cuda()
 
         if torch.backends.cudnn.is_available():
             import torch.backends.cudnn as cudnn
             cudnn.benchmark = True
             cudnn.deterministic = True
-
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
-                                               pin_memory=True, num_workers=args.workers)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
-                                             pin_memory=True, num_workers=args.workers)
 
     if args.scheduler == 'fixed':
         step_size = args.step_size
@@ -295,18 +207,14 @@ def main(args):
 
         print_info_message(
             'Running epoch {} with learning rates: base_net {:.6f}, segment_net {:.6f}'.format(epoch, lr_base, lr_seg))
-        miou_train, train_loss = train(model, train_loader, optimizer, criterion, seg_classes, epoch, device=device, use_depth=args.use_depth)
-        miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device, use_depth=args.use_depth)
+        miou_train, train_loss, train_seg_loss, train_cls_loss = train(model, train_loader, optimizer, criterion_seg, seg_classes, epoch, criterion_cls, device=device, use_depth=args.use_depth)
+        miou_val, val_loss, val_seg_loss, val_cls_loss = val(model, val_loader, criterion_seg, criterion_cls, seg_classes, device=device, use_depth=args.use_depth)
 
         batch = iter(val_loader).next()
         if args.use_depth:
-            in_training_visualization_img(model, images=batch[0].to(device=device), depths=batch[2].to(device=device), labels=batch[1].to(device=device), class_encoding=color_encoding, writer=writer, epoch=epoch, data='Segmentation', device=device)
-
-            image_grid = torchvision.utils.make_grid(batch[2].to(device=device).data.cpu()).numpy()
-            print(type(image_grid))
-            writer.add_image('Segmentation/depths', image_grid, epoch)
+            in_training_visualization_2(model, images=batch[0].to(device=device), depths=batch[2].to(device=device), labels=batch[1].to(device=device), class_encoding=color_encoding, writer=writer, epoch=epoch, data='Segmentation', device=device)
         else:
-            in_training_visualization_img(model, images=batch[0].to(device=device), labels=batch[1].to(device=device), class_encoding=color_encoding, writer=writer, epoch=epoch, data='Segmentation', device=device)
+            in_training_visualization_2(model, images=batch[0].to(device=device), labels=batch[1].to(device=device), class_encoding=color_encoding, writer=writer, epoch=epoch, data='Segmentation', device=device)
 
 #            image_grid = torchvision.utils.make_grid(outputs.data.cpu()).numpy()
 #            writer.add_image('Segmentation/results/val', image_grid, epoch)
@@ -327,7 +235,11 @@ def main(args):
         writer.add_scalar('Segmentation/LR/base', round(lr_base, 6), epoch)
         writer.add_scalar('Segmentation/LR/seg', round(lr_seg, 6), epoch)
         writer.add_scalar('Segmentation/Loss/train', train_loss, epoch)
+        writer.add_scalar('Segmentation/SegLoss/train', train_seg_loss, epoch)
+        writer.add_scalar('Segmentation/ClsLoss/train', train_cls_loss, epoch)
         writer.add_scalar('Segmentation/Loss/val', val_loss, epoch)
+        writer.add_scalar('Segmentation/SegLoss/val', val_seg_loss, epoch)
+        writer.add_scalar('Segmentation/ClsLoss/val', val_cls_loss, epoch)
         writer.add_scalar('Segmentation/mIOU/train', miou_train, epoch)
         writer.add_scalar('Segmentation/mIOU/val', miou_val, epoch)
         writer.add_scalar('Segmentation/Complexity/Flops', best_miou, math.ceil(flops))
@@ -391,8 +303,7 @@ if __name__ == "__main__":
     parser.add_argument('--model-width', default=224, type=int, help='Model width')
     parser.add_argument('--model-height', default=224, type=int, help='Model height')
     parser.add_argument('--use-depth', default=False, type=bool, help='Use depth')
-    parser.add_argument('--trainable-fusion', default=False, type=bool, help='Use depth')
-    parser.add_argument('--dense-fuse', default=False, type=bool, help='Use depth')
+    parser.add_argument('--use-class', default=True, type=bool, help='Use depth')
 
     args = parser.parse_args()
 
@@ -414,8 +325,6 @@ if __name__ == "__main__":
     elif args.dataset == 'greenhouse':
         args.scale = (0.5, 2.0)
     elif args.dataset == 'ishihara':
-        args.scale = (0.5, 2.0)
-    elif args.dataset == 'sun':
         args.scale = (0.5, 2.0)
     else:
         print_error_message('{} dataset not yet supported'.format(args.dataset))

@@ -10,8 +10,10 @@ from utilities.metrics.segmentation_miou import MIOU
 from utilities.print_utils import *
 from torch.nn.parallel import gather
 
-def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, device='cuda', use_depth=False):
+def train_seg_cls(model, dataset_loader, optimizer, criterion_seg, num_classes, epoch, criterion_cls, cls_loss_weight=1.0, device='cuda', use_depth=False):
     losses = AverageMeter()
+    cls_losses = AverageMeter()
+    seg_losses = AverageMeter()
     batch_time = AverageMeter()
     inter_meter = AverageMeter()
     union_meter = AverageMeter()
@@ -26,27 +28,36 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
 
         if use_depth:
             depth = batch[2].to(device=device)
-            outputs = model(inputs, depth)
+            outputs_seg, outputs_cls = model(inputs, depth)
         else:
-            outputs = model(inputs)
+            outputs_seg, outputs_cls = model(inputs)
+
+        cls_ids = batch[3].to(device=device)
 
         if device == 'cuda':
-            pass
-#
-            loss = criterion(outputs, target).mean()
-            if isinstance(outputs, (list, tuple)):
-                target_dev = outputs[0].device
-                outputs = gather(outputs, target_device=target_dev)
-        else:
-            pass
-            loss = criterion(outputs, target)
+            loss_seg = criterion_seg(outputs_seg, target).mean()
 
-        inter, union = miou_class.get_iou(outputs, target)
+            loss_cls = criterion_cls(outputs_cls, cls_ids).mean()
+            loss = loss_seg + cls_loss_weight * loss_cls
+
+
+            if isinstance(outputs_seg, (list, tuple)):
+                target_dev = outputs[0].device
+                outputs_seg = gather(outputs_seg, target_device=target_dev)
+        else:
+            loss_seg = criterion_seg(outputs_seg, target)
+
+            loss_cls = criterion_cls(outputs_cls, cls_ids)
+            loss = loss_seg + cls_loss_weight * loss_cls
+
+        inter, union = miou_class.get_iou(outputs_seg, target)
 
         inter_meter.update(inter)
         union_meter.update(union)
 
         losses.update(loss.item(), inputs.size(0))
+        seg_losses.update(loss_seg.item(), inputs.size(0))
+        cls_losses.update(loss_cls.item(), inputs.size(0))
 
         optimizer.zero_grad()
         loss.backward()
@@ -65,9 +76,10 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
     miou = iou.mean() * 100
 
-    return miou, losses.avg
+    return miou, losses.avg, seg_losses.avg, cls_losses.avg
 
-def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda', use_depth=False):
+
+def val_seg_cls(model, dataset_loader, criterion_seg=None, criterion_cls=None, num_classes=21, cls_loss_weight=1.0, device='cuda', use_depth=False):
     model.eval()
     inter_meter = AverageMeter()
     union_meter = AverageMeter()
@@ -76,8 +88,10 @@ def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda'
 
     miou_class = MIOU(num_classes=num_classes)
 
-    if criterion:
+    if criterion_seg:
         losses = AverageMeter()
+        cls_losses = AverageMeter()
+        seg_losses = AverageMeter()
 
     with torch.no_grad():
         for i, batch in enumerate(dataset_loader):
@@ -86,21 +100,33 @@ def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda'
             
             if use_depth:
                 depth = batch[2].to(device=device)
-                outputs = model(inputs, depth)
+                outputs_seg, outputs_cls = model(inputs, depth)
             else:
-                outputs = model(inputs)
+                outputs_seg, outputs_cls = model(inputs)
 
-            if criterion:
+            cls_ids = batch[3].to(device=device)
+
+            if criterion_seg and criterion_cls:
                 if device == 'cuda':
-                    loss = criterion(outputs, target).mean()
-                    if isinstance(outputs, (list, tuple)):
-                        target_dev = outputs[0].device
-                        outputs = gather(outputs, target_device=target_dev)
-                else:
-                    loss = criterion(outputs, target)
-                losses.update(loss.item(), inputs.size(0))
+                    loss_seg = criterion_seg(outputs_seg, target).mean()
+                    loss_cls = criterion_cls(outputs_cls, cls_ids).mean()
 
-            inter, union = miou_class.get_iou(outputs, target)
+                    loss = loss_seg + cls_loss_weight * loss_cls
+
+                    if isinstance(outputs_seg, (list, tuple)):
+                        target_dev = outputs[0].device
+                        outputs_seg = gather(outputs_seg, target_device=target_dev)
+                else:
+                    loss_seg = criterion_seg(outputs_seg, target)
+                    loss_cls = criterion_cls(outputs_cls, cls_ids)
+
+                    loss = loss_seg + cls_loss_weight * loss_cls
+
+                losses.update(loss.item(), inputs.size(0))
+                seg_losses.update(loss_seg.item(), inputs.size(0))
+                cls_losses.update(loss_cls.item(), inputs.size(0))
+
+            inter, union = miou_class.get_iou(outputs_seg, target)
             inter_meter.update(inter)
             union_meter.update(union)
 
@@ -111,7 +137,7 @@ def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda'
             if i % 10 == 0:  # print after every 100 batches
                 iou = inter_meter.sum / (union_meter.sum + 1e-10)
                 miou = iou.mean() * 100
-                loss_ = losses.avg if criterion is not None else 0
+                loss_ = losses.avg if criterion_seg is not None else 0
                 print_log_message("[%d/%d]\t\tBatch Time:%.4f\t\tLoss:%.4f\t\tmiou:%.4f" %
                       (i, len(dataset_loader), batch_time.avg, loss_, miou))
 
@@ -119,7 +145,7 @@ def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda'
     miou = iou.mean() * 100
 
     print_info_message('Mean IoU: {0:.2f}'.format(miou))
-    if criterion:
-        return miou, losses.avg
+    if criterion_seg and criterion_cls:
+        return miou, losses.avg, seg_losses.avg, cls_losses.avg
     else:
-        return miou, 0
+        return miou, 0, 0, 0
