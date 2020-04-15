@@ -350,7 +350,8 @@ def espdnet_seg(args):
     depth_weights = weights
     dataset=args.dataset
     trainable_fusion=args.trainable_fusion
-    model = ESPDNetSegmentation(args, classes=classes, dataset=dataset, trainable_fusion=trainable_fusion)
+    dense_fuse=args.dense_fuse
+    model = ESPDNetSegmentation(args, classes=classes, dataset=dataset, dense_fuse=dense_fuse, trainable_fusion=trainable_fusion)
     if weights:
         import os
         if os.path.isfile(weights):

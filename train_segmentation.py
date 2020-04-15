@@ -392,6 +392,7 @@ if __name__ == "__main__":
     parser.add_argument('--model-height', default=224, type=int, help='Model height')
     parser.add_argument('--use-depth', default=False, type=bool, help='Use depth')
     parser.add_argument('--trainable-fusion', default=False, type=bool, help='Use depth')
+    parser.add_argument('--dense-fuse', default=False, type=bool, help='Use depth')
 
     args = parser.parse_args()
 
