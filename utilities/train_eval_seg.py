@@ -31,7 +31,7 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
             outputs = model(inputs)
 
         if device == 'cuda':
-            pass
+#            print("Target size {}".format(target.size()))
 #
             loss = criterion(outputs, target).mean()
             if isinstance(outputs, (list, tuple)):

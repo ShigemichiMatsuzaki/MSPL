@@ -73,12 +73,13 @@ def main(args):
     elif args.dataset == 'greenhouse':
         print(args.use_depth)
         from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
-        train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+        train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='train_greenhouse_gt.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
         val_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='val_greenhouse.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
-        class_weights = np.load('class_weights.npy')[:4]
+        class_weights = np.load('class_weights.npy')# [:4]
         print(class_weights)
         class_wts = torch.from_numpy(class_weights).float().to(device)
 
+        print(GREENHOUSE_CLASS_LIST)
         seg_classes = len(GREENHOUSE_CLASS_LIST)
         color_encoding = OrderedDict([
             ('end_of_plant', (0, 255, 0)),
@@ -138,7 +139,18 @@ def main(args):
             ('Wall', (102,102,156)),
             ('Window', (220,220,  0))
         ])
+    elif args.dataset == 'camvid':
+        print(args.use_depth)
+        from data_loader.segmentation.camvid import CamVidSegmentation, CAMVID_CLASS_LIST, color_encoding
+        train_dataset = CamVidSegmentation(
+            root=args.data_path, list_name='train_camvid.txt', train=True, size=crop_size, scale=args.scale)
+        val_dataset = CamVidSegmentation(
+            root=args.data_path, list_name='val_camvid.txt', train=False, size=crop_size, scale=args.scale)
 
+        seg_classes = len(CAMVID_CLASS_LIST)
+        class_wts = torch.ones(seg_classes)
+
+        args.use_depth = False
     else:
         print_error_message('Dataset: {} not yet supported'.format(args.dataset))
         exit(-1)
@@ -154,6 +166,7 @@ def main(args):
         from model.segmentation.espdnet import espdnet_seg
         args.classes = seg_classes
         print("Trainable fusion : {}".format(args.trainable_fusion))
+        print("Segmentation classes : {}".format(seg_classes))
         model = espdnet_seg(args)
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
@@ -246,7 +259,7 @@ def main(args):
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                                                pin_memory=True, num_workers=args.workers)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=64, shuffle=False,
                                              pin_memory=True, num_workers=args.workers)
 
     if args.scheduler == 'fixed':
@@ -298,15 +311,52 @@ def main(args):
         miou_train, train_loss = train(model, train_loader, optimizer, criterion, seg_classes, epoch, device=device, use_depth=args.use_depth)
         miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device, use_depth=args.use_depth)
 
+        batch_train = iter(train_loader).next()
         batch = iter(val_loader).next()
         if args.use_depth:
-            in_training_visualization_img(model, images=batch[0].to(device=device), depths=batch[2].to(device=device), labels=batch[1].to(device=device), class_encoding=color_encoding, writer=writer, epoch=epoch, data='Segmentation', device=device)
+            in_training_visualization_img(
+                model,
+                images=batch_train[0].to(device=device),
+                depths=batch_train[2].to(device=device),
+                labels=batch_train[1].to(device=device),
+                class_encoding=color_encoding,
+                writer=writer,
+                epoch=epoch,
+                data='Segmentation/train',
+                device=device)
+            in_training_visualization_img(
+                model, 
+                images=batch[0].to(device=device),
+                depths=batch[2].to(device=device),
+                labels=batch[1].to(device=device),
+                class_encoding=color_encoding,
+                writer=writer,
+                epoch=epoch,
+                data='Segmentation/val',
+                device=device)
 
             image_grid = torchvision.utils.make_grid(batch[2].to(device=device).data.cpu()).numpy()
             print(type(image_grid))
             writer.add_image('Segmentation/depths', image_grid, epoch)
         else:
-            in_training_visualization_img(model, images=batch[0].to(device=device), labels=batch[1].to(device=device), class_encoding=color_encoding, writer=writer, epoch=epoch, data='Segmentation', device=device)
+            in_training_visualization_img(
+                model,
+                images=batch_train[0].to(device=device), 
+                labels=batch_train[1].to(device=device), 
+                class_encoding=color_encoding,
+                writer=writer,
+                epoch=epoch,
+                data='Segmentation/train',
+                device=device)
+            in_training_visualization_img(
+                model,
+                images=batch[0].to(device=device),
+                labels=batch[1].to(device=device),
+                class_encoding=color_encoding,
+                writer=writer,
+                epoch=epoch,
+                data='Segmentation/val',
+                device=device)
 
 #            image_grid = torchvision.utils.make_grid(outputs.data.cpu()).numpy()
 #            writer.add_image('Segmentation/results/val', image_grid, epoch)
@@ -417,6 +467,8 @@ if __name__ == "__main__":
         args.scale = (0.5, 2.0)
     elif args.dataset == 'sun':
         args.scale = (0.5, 2.0)
+    elif args.dataset == 'camvid':
+        args.scale = (0.5, 2.0)
     else:
         print_error_message('{} dataset not yet supported'.format(args.dataset))
 
@@ -443,7 +495,14 @@ if __name__ == "__main__":
 
     args.crop_size = tuple(args.crop_size)
     timestr = time.strftime("%Y%m%d-%H%M%S")
-    args.savedir = '{}/model_{}_{}/s_{}_sch_{}_loss_{}_res_{}_sc_{}_{}/{}'.format(args.savedir, args.model, args.dataset, args.s,
-                                                                         args.scheduler,
-                                                                         args.loss_type, args.crop_size[0], args.scale[0], args.scale[1], timestr)
+    use_depth_str = "_rgbd" if args.use_depth else "_rgb"
+    if args.use_depth:
+        trainable_fusion_str = "_gated" if args.trainable_fusion else "_naive"
+    else:
+        trainable_fusion_str = ""
+
+    args.savedir = '{}/model_{}_{}/s_{}_sch_{}_loss_{}_res_{}_sc_{}_{}{}{}/{}'.format(
+        args.savedir, args.model, args.dataset, args.s,
+        args.scheduler, args.loss_type, args.crop_size[0], args.scale[0], args.scale[1], use_depth_str, trainable_fusion_str, timestr)
+
     main(args)

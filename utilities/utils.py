@@ -6,6 +6,7 @@ import numpy as np
 import torchvision
 import torchvision.transforms as transforms
 from collections import OrderedDict
+import logging
 
 #============================================
 __author__ = "Sachin Mehta"
@@ -75,6 +76,7 @@ def in_training_visualization_img(model, images, depths=None, labels=None, class
     model.eval()
     with torch.no_grad():
         if depths is not None:
+            print("Eval. depths:{}".format(depths.size()))
             predictions = model(images, depths)
         else:
             predictions = model(images)
@@ -213,3 +215,23 @@ def calc_cls_class_weight(data_loader, class_num):
             class_array[i] += (cls_ids == i).sum()
 
     return class_array / class_array.sum()
+
+def set_logger(output_dir=None, log_file=None, debug=False):
+    head = '%(asctime)-15s Host %(message)s'
+    logger_level = logging.INFO if not debug else logging.DEBUG
+    if all((output_dir, log_file)) and len(log_file) > 0:
+        logger = logging.getLogger()
+        log_path = os.path.join(output_dir, log_file)
+        handler = logging.FileHandler(log_path)
+        formatter = logging.Formatter(head)
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logger_level)
+    else:
+        logging.basicConfig(level=logger_level, format=head)
+        logger = logging.getLogger()
+    return logger
+
