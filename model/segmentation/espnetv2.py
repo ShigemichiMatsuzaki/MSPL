@@ -38,7 +38,8 @@ class ESPNetv2Segmentation(nn.Module):
             'city': 16,
             'coco': 32,
             'greenhouse': 16,
-            'ishihara': 16
+            'ishihara': 16,
+            'camvid': 16
         }
         base_dec_planes = dec_feat_dict[dataset]
         dec_planes = [4*base_dec_planes, 3*base_dec_planes, 2*base_dec_planes, classes]

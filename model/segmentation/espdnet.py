@@ -30,8 +30,8 @@ class FusionGate(nn.Module):
         
     def forward(self, rgb, depth):
         if self.is_trainable:
-          # print(rgb.size())
-          # print(depth.size())
+    #      print(rgb.size())
+    #      print(depth.size())
           # 1. Concat RGB and depth features
           output = torch.cat((rgb, depth), 1)
   
@@ -81,7 +81,6 @@ class ESPDNetSegmentation(nn.Module):
         del self.depth_base_net.classifier
         del self.depth_base_net.level5
         del self.depth_base_net.level5_0
-        config = self.depth_base_net.config
 
         self.fusion_gate_level1 = FusionGate(nchannel=32, is_trainable=trainable_fusion)
         self.fusion_gate_level2 = FusionGate(nchannel=128, is_trainable=trainable_fusion)
@@ -134,7 +133,8 @@ class ESPDNetSegmentation(nn.Module):
             'coco': 32,
             'greenhouse': 16,
             'ishihara': 16,
-            'sun': 16
+            'sun': 16,
+            'camvid': 16
         }
         base_dec_planes = dec_feat_dict[dataset]
         dec_planes = [4*base_dec_planes, 3*base_dec_planes, 2*base_dec_planes, classes]
@@ -223,6 +223,10 @@ class ESPDNetSegmentation(nn.Module):
         :param x_d: Receives the input Depth image
         :return: a C-dimensional vector, C=# of classes
         '''
+
+        if x_d is not None:
+            pass
+#            print(x.size(), x_d.size())
 
         x_size = (x.size(2), x.size(3)) # Width and height
 
@@ -380,7 +384,6 @@ def espdnet_seg(args):
         print_warning_message('Training from scratch!!')
 
     if depth_weights:
-        print(depth_weights)
         import os
         if os.path.isfile(depth_weights):
             num_gpus = torch.cuda.device_count()
@@ -410,6 +413,44 @@ def espdnet_seg(args):
         dbasenet_dict.update(overlap_dict)
         model.depth_base_net.load_state_dict(dbasenet_dict)
         print_info_message('Pretrained depth basenet model loaded!!')
+
+    return model
+
+def espdnet_seg_with_pre_rgbd(args):
+    classes = args.classes
+    scale=args.s
+    weights = args.weights
+    #depth_weights = 'results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200401-114045/espnetv2_2.0_480_checkpoint.pth.tar'
+    depth_weights = weights
+    dataset=args.dataset
+    trainable_fusion=args.trainable_fusion
+    dense_fuse=args.dense_fuse
+    model = ESPDNetSegmentation(args, classes=classes, dataset=dataset, dense_fuse=dense_fuse, trainable_fusion=trainable_fusion)
+    if weights:
+        import os
+        if os.path.isfile(weights):
+            num_gpus = torch.cuda.device_count()
+            device = 'cuda' if num_gpus >= 1 else 'cpu'
+            pretrained_dict = torch.load(weights, map_location=torch.device(device))
+        else:
+            print_error_message('Weight file does not exist at {}. Please check. Exiting!!'.format(weights))
+            exit()
+
+        print_info_message('Loading pretrained basenet model weights')
+        model_dict = model.state_dict()
+
+        overlap_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+
+        if len(overlap_dict) == 0:
+            print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
+            exit()
+
+        print_info_message('{:.2f} % of weights copied from basenet to segnet'.format(len(overlap_dict) * 1.0/len(model_dict) * 100))
+        model_dict.update(overlap_dict)
+        model.load_state_dict(model_dict)
+        print_info_message('Pretrained basenet model loaded!!')
+    else:
+        print_warning_message('Training from scratch!!')
 
     return model
 
