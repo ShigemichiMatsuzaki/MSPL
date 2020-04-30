@@ -12,6 +12,7 @@ from nn_layers.espnet_utils import C, CBR
 from model.classification.espnetv2 import EESPNet
 from utilities.print_utils import *
 from torch.nn import functional as F
+import copy
 
 class FusionGate(nn.Module):
     '''
@@ -76,8 +77,9 @@ class ESPDNetSegmentation(nn.Module):
         #
         # Depth
         #
-        args.channels = 1
-        self.depth_base_net = EESPNet(args)
+        tmp_args = copy.deepcopy(args)
+        tmp_args.channels = 1
+        self.depth_base_net = EESPNet(tmp_args)
         del self.depth_base_net.classifier
         del self.depth_base_net.level5
         del self.depth_base_net.level5_0
@@ -416,12 +418,11 @@ def espdnet_seg(args):
 
     return model
 
-def espdnet_seg_with_pre_rgbd(args):
+def espdnet_seg_with_pre_rgbd(args, ignore_layers=[], load_entire_weights=False):
     classes = args.classes
     scale=args.s
     weights = args.weights
     #depth_weights = 'results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200401-114045/espnetv2_2.0_480_checkpoint.pth.tar'
-    depth_weights = weights
     dataset=args.dataset
     trainable_fusion=args.trainable_fusion
     dense_fuse=args.dense_fuse
@@ -439,7 +440,10 @@ def espdnet_seg_with_pre_rgbd(args):
         print_info_message('Loading pretrained basenet model weights')
         model_dict = model.state_dict()
 
-        overlap_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+        overlap_dict = {k: v 
+            for k, v in pretrained_dict.items()
+            if (k in model_dict) and not k in ignore_layers
+            and ('base_net' in k or load_entire_weights)}
 
         if len(overlap_dict) == 0:
             print_error_message('No overlaping weights between model file and pretrained weight file. Please check')

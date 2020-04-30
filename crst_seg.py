@@ -2,6 +2,7 @@ import argparse
 import sys
 from packaging import version
 import time
+import datetime
 # import util
 import os
 import os.path as osp
@@ -19,6 +20,7 @@ import torch.optim as optim
 import torchvision.transforms as transforms
 import transforms as ext_transforms
 from operator import itemgetter
+import copy
 
 import scipy
 from scipy import ndimage
@@ -43,8 +45,7 @@ from tensorboardX import SummaryWriter
 #from metric.iou import IoU
 #from enet.greenhouse import Greenhouse, GreenhouseTestDataSet, GreenhouseStMineDataSet, GreenhouseWithTravDataSet
 from tqdm import tqdm
-        
-
+from data_loader.segmentation.greenhouse import id_camvid_to_greenhouse
 
 ### shared ###
 IMG_MEAN = np.array((0.406, 0.456, 0.485), dtype=np.float32) # BGR
@@ -258,8 +259,6 @@ def get_arguments():
                         help="Path to save tensorboard log")
     parser.add_argument("--trav-root", type=str, default=TRAV_ROOT, dest='trav_root',
                         help="The root directory of the dataset including traversability_masks")
-
-
     # model related params
     parser.add_argument('--s', type=float, default=2.0, help='Factor by which channels will be scaled')
     parser.add_argument('--model', default='espnet',
@@ -273,6 +272,12 @@ def get_arguments():
     parser.add_argument('--use-depth', default=False, type=bool, help='Use depth')
     parser.add_argument('--trainable-fusion', default=False, type=bool, help='Use depth')
     parser.add_argument('--dense-fuse', default=False, type=bool, help='Use depth')
+    parser.add_argument("--outsource", type=str, default=None, dest='outsource',
+                        help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
+    parser.add_argument("--outsource-weights", type=str, default='./results_segmentation/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb_/20200420-095339/espdnet_2.0_480_best.pth', dest='outsource_weights',
+                        help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
+    parser.add_argument("--use-traversable", type=str, default=False, dest='use_traversable',
+                        help="Whether to use a class 'traversable plant'")
 
     return parser.parse_args()
 
@@ -312,10 +317,23 @@ def main():
     args.weights = args.restore_from
     args.scale = (0.5, 2.0)
     args.crop_size = tuple(args.crop_size)
-    timestr = time.strftime("%Y%m%d-%H%M%S")
-    args.savedir = '{}/model_{}_{}/s_{}_res_{}_crst/{}'.format(
-        args.savedir, args.model, args.dataset,
-        args.s, args.crop_size[0], timestr)
+#    timestr = time.strftime("%Y%m%d-%H%M%S")
+    now = datetime.datetime.now()
+    now += datetime.timedelta(hours=9)
+    timestr = now.strftime("%Y%m%d-%H%M%S")
+    use_depth_str = "_rgbd" if args.use_depth else "_rgb"
+    if args.use_depth:
+        trainable_fusion_str = "_gated" if args.trainable_fusion else "_naive"
+    else:
+        trainable_fusion_str = ""
+
+    outsource_str = "_os_" + args.outsource if args.outsource else ""
+
+    args.savedir = '{}/model_{}_{}/s_{}_res_{}_crst{}{}_tgtinit_{}_tgtstep_{}_mr_{}/{}'.format(
+        args.save, args.model, args.dataset,
+        args.s, args.crop_size[0], use_depth_str, trainable_fusion_str,
+        args.init_tgt_port, args.tgt_port_step, args.mr_weight_kld, 
+        timestr)
 
     if not os.path.isdir(args.savedir):
         os.makedirs(args.savedir)
@@ -344,11 +362,11 @@ def main():
 
         train_dataset = GreenhouseRGBDSegmentation(
             list_name=args.data_src_list, train=True,
-            size=args.crop_size, scale=args.scale, use_depth=args.use_depth)
+            size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
 
         val_dataset = GreenhouseRGBDSegmentation(
                 list_name=args.data_tgt_test_list, train=False,
-                size=args.crop_size, scale=args.scale, use_depth=args.use_depth)
+                size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
 
         class_weights = np.load('class_weights.npy')[:4]
         class_wts = torch.from_numpy(class_weights).float().to(device)
@@ -380,7 +398,21 @@ def main():
     elif args.model == 'espdnet':
         from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
         args.classes = seg_classes
-        model = espdnet_seg_with_pre_rgbd(args)
+
+        # Import pretrained model trained for giving initial pseudo-labels
+        if args.outsource == 'camvid':
+            model = espdnet_seg_with_pre_rgbd(args)
+
+            tmp_args = copy.deepcopy(args)
+            tmp_args.trainable_fusion = False
+            tmp_args.dense_fuse = False
+            tmp_args.use_depth  = False
+            tmp_args.classes = 13
+            tmp_args.dataset = 'camvid'
+            tmp_args.weights = args.outsource_weights
+            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+        elif args.outsource is None:
+            model = espdnet_seg_with_pre_rgbd(args)
 
     print("Model {} is load successfully!".format(args.restore_from))
 
@@ -430,9 +462,14 @@ def main():
         ########## pseudo-label generation
         if round_idx != args.num_rounds - 1: # If it's not the last round
             # evaluation & save confidence vectors
-            conf_dict, pred_cls_num, save_prob_path, save_pred_path = val(model, device, save_round_eval_path,
-                                                                          round_idx, tgt_num, label_2_id, valid_labels,
-                                                                          args, logger, class_encoding, writer)
+            if round_idx == 0 and args.outsource:
+                conf_dict, pred_cls_num, save_prob_path, save_pred_path = val(model_outsource, device, save_round_eval_path,
+                                                                              round_idx, tgt_num, label_2_id, valid_labels,
+                                                                              args, logger, class_encoding, writer, args.outsource)
+            else:
+                conf_dict, pred_cls_num, save_prob_path, save_pred_path = val(model, device, save_round_eval_path,
+                                                                              round_idx, tgt_num, label_2_id, valid_labels,
+                                                                              args, logger, class_encoding, writer)
             # class-balanced thresholds
             cls_thresh = kc_parameters(conf_dict, pred_cls_num, tgt_portion, round_idx, save_stats_path, args, logger)
             tgt_portion = min(tgt_portion + args.tgt_port_step, args.max_tgt_port)
@@ -491,7 +528,7 @@ def main():
                     # Import source dataset (with manual labels)
                     srctrainset = GreenhouseRGBDSegmentation(
                         list_name=args.data_src_list, train=True, 
-                        size=args.crop_size, scale=args.scale, use_depth=args.use_depth)
+                        size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
 #                    srctrainset = Greenhouse(
 #                        args.data_src_dir, list_path=src_train_lst, transform=image_transform,
 #                        label_transform=label_transform, reg_weight=reg_weight_src)
@@ -505,7 +542,8 @@ def main():
                     tgttrainset = GreenhouseRGBDStMineDataSet(
                         tgt_train_lst,pseudo_root=save_pseudo_label_path, max_iters=tgt_num, reg_weight=reg_weight_tgt, 
                         rare_id = rare_id, mine_id=mine_id, mine_chance = mine_chance, size=input_size,
-                        mirror=args.random_mirror, scale=train_scale_tgt, mean=IMG_MEAN, std=IMG_STD)
+                        mirror=args.random_mirror, scale=train_scale_tgt, mean=IMG_MEAN, std=IMG_STD,
+                        use_depth=args.use_depth, use_traversable=args.use_traversable)
 #                     tgttrainset = GreenhouseWithTravDataSet(
 #                         args.data_tgt_dir, tgt_train_lst, trav_root=args.trav_root, 
 #                         transform=image_transform, label_transform=label_transform,
@@ -523,6 +561,14 @@ def main():
                 mixtrainset, batch_size=args.batch_size, shuffle=True,
                 num_workers=0, pin_memory=args.pin_memory)
             # optimizer
+            if args.use_depth:
+                train_params = [{'params': model.get_basenet_params(), 'lr': args.learning_rate},
+                                {'params': model.get_segment_params(), 'lr': args.learning_rate * 10},
+                                {'params': model.get_depth_encoder_params(), 'lr': args.learning_rate * 10}]
+            else:
+                train_params = [{'params': model.get_basenet_params(), 'lr': args.learning_rate},
+                                {'params': model.get_segment_params(), 'lr': args.learning_rate * 10}]
+
             tot_iter = np.ceil(float(src_num_sel + tgt_num) / args.batch_size)
             if args.optimizer == 'SGD':
                 optimizer = optim.SGD(
@@ -577,8 +623,8 @@ def main():
             test(model, device, save_round_eval_path, round_idx+2, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
                  valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
 
-def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer):
-    """Create the model and start the evaluation process."""
+"""Create the model and start the evaluation process."""
+def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer, outsource=None):
     ## scorer
     scorer = ScoreUpdater(valid_labels, args.num_classes_seg, tgt_num, logger)
     scorer.reset()
@@ -591,7 +637,7 @@ def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, val
         from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation
 
         ds = GreenhouseRGBDSegmentation(
-            list_name=args.data_tgt_train_list, train=False)
+            list_name=args.data_tgt_train_list, train=False, use_traversable=args.use_traversable, use_depth=args.use_depth)
 #        testloader = data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
 
     testloader = data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
@@ -635,24 +681,48 @@ def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, val
         ious = 0
         with tqdm(total=len(testloader)) as pbar:
             for index, batch in enumerate(tqdm(testloader)):
-                image, label, depth, name, _ = batch
+                if args.use_depth:
+                    image, label, depth, name, _ = batch
+                else:
+                    image, label, name, _ = batch
+
                 # if args.model == 'ENet':
-                output2 = model(image.to(device), depth.to(device))
+                if not args.use_depth or outsource == 'camvid':
+                    output2 = model(image.to(device))
+                else:
+                    output2 = model(image.to(device), depth.to(device))
+
                 output = softmax2d(interp(output2)).cpu().data[0].numpy()
     
                 if args.test_flipping: # and args.model == 'ENet':
-                    output2 = model(torch.from_numpy(image.numpy()[:,:,:,::-1].copy()).to(device), torch.from_numpy(depth.numpy()[:,:,:,::-1].copy()).to(device))
+                    if not args.use_depth or outsource == 'camvid':
+                        output2 = model(
+                            torch.from_numpy(image.numpy()[:,:,:,::-1].copy()).to(device))
+                    else:
+                        output2 = model(
+                            torch.from_numpy(image.numpy()[:,:,:,::-1].copy()).to(device),
+                            torch.from_numpy(depth.numpy()[:,:,:,::-1].copy()).to(device))
+
                     output = 0.5 * ( output + softmax2d(interp(output2)).cpu().data[0].numpy()[:,:,::-1] )
-    
+
+                # If the label is transfered from an external dataset,
+                #   convert the output tensor (numpy)
+                if outsource == 'camvid':
+                    output = transfer_camvid_output_to_greenhouse(output)
+
                 output = output.transpose(1,2,0)
                 amax_output = np.asarray(np.argmax(output, axis=2), dtype=np.uint8)
-                conf = np.amax(output,axis=2)
+                conf = np.amax(output,axis=2) # amax : get a maximum value
                 # score
                 pred_label = amax_output.copy()
                 # label = label_2_id[np.asarray(label.numpy(), dtype=np.uint8)]
     
                 # save visualized seg maps & predication prob map
-                amax_output_col = colorize_mask(amax_output)
+                if outsource == 'camvid':
+                    amax_output_col = colorize_mask(id_camvid_to_greenhouse[amax_output])
+                else:
+                    amax_output_col = colorize_mask(amax_output)
+
     #            label = label_2_id[np.asarray(label.numpy(), dtype=np.uint8)]
                 name = name[0].split('/')[-1]
                 image_name = name.rsplit('.', 1)[0]
@@ -711,13 +781,16 @@ def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, val
     batch = iter(testloader).next()
     image = batch[0].to(device)
     label = batch[1].long()
-    depth = batch[2].to(device)
+    if args.use_depth:
+        depth = batch[2].to(device)
+        in_training_visualization_img(
+            model, images=image, depths=depth, labels=label,
+            class_encoding=class_encoding, writer=writer, epoch=round_idx, data='cbst_enet/val', device=device)
 
 #    if args.dataset != 'greenhouse':
 #        label = label_2_id[label.cpu().numpy()]
 #        writer.add_scalar('cbst_enet/val/mean_IoU', np.mean(ious)/len(testloader), round_idx)
 #        util.in_training_visualization_img(model, image, torch.from_numpy(label).long(), class_encoding, writer, round_idx, 'cbst_enet/val', device)
-    in_training_visualization_img(model, images=image, depths=depth, labels=label, class_encoding=class_encoding, writer=writer, epoch=round_idx, data='cbst_enet/val', device=device)
 
     logger.info('###### Finish evaluating target domain train set in round {}! Time cost: {:.2f} seconds. ######'.format(round_idx, time.time()-start_eval))
 
@@ -740,8 +813,11 @@ def train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx
         for i_iter, batch in enumerate(tqdm(mix_trainloader)):
             images = batch[0].to(device)
             labels = batch[1].to(device)
-            depths = batch[2].to(device)
-            reg_weights = batch[4]
+            if args.use_depth:
+                depths = batch[2].to(device)
+                reg_weights = batch[4]
+            else:
+                reg_weights = batch[3]
     
             optimizer.zero_grad()
             adjust_learning_rate(optimizer, i_iter, tot_iter)
@@ -749,9 +825,15 @@ def train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx
             # Upsample the output of the model to the input size
             # TODO: Change the input according to the model type
             if interp is not None:
-                pred = interp(model(images, depths))
+                if args.use_depth:
+                    pred = interp(model(images, depths))
+                else:
+                    pred = interp(model(images))
             else:
-                pred = model(images, depths)
+                if args.use_depth:
+                    pred = model(images, depths)
+                else:
+                    pred = model(images)
     
     #        print(pred.size())
             # Model regularizer
@@ -793,8 +875,11 @@ def train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx
     #
     
     # Before label conversion
-     
-    in_training_visualization_img(model, images, depths, labels.long(), class_encoding, writer, writer_idx, 'cbst_enet/train', device)
+    if args.use_depth: 
+        in_training_visualization_img(model, images, depths, labels.long(), class_encoding, writer, writer_idx, 'cbst_enet/train', device)
+    else:
+        in_training_visualization_img(model, images, None, labels.long(), class_encoding, writer, writer_idx, 'cbst_enet/train', device)
+
     
     writer_idx += 1
     
@@ -833,7 +918,7 @@ def test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, test
         from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation
 
         ds = GreenhouseRGBDSegmentation(
-            list_name=args.data_tgt_test_list, train=False)
+            list_name=args.data_tgt_test_list, train=False, use_traversable=args.use_traversable, use_depth=args.use_depth)
 
 #        testloader = data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
 
@@ -878,15 +963,24 @@ def test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, test
 
             images = batch[0].to(device)
             labels = batch[1].to(device)
-            depths = batch[2].to(device)
-            reg_weights = batch[4]
+            if args.use_depth:
+                depths = batch[2].to(device)
+                reg_weights = batch[4]
+            else:
+                reg_weights = batch[3]
 
             # Upsample the output of the model to the input size
             # TODO: Change the input according to the model type
             if interp is not None:
-                pred = interp(model(images, depths))
+                if args.use_depth:
+                    pred = interp(model(images, depths))
+                else:
+                    pred = interp(model(images))
             else:
-                pred = model(images, depths)
+                if args.use_depth:
+                    pred = model(images, depths)
+                else:
+                    pred = model(images)
 
             if args.lr_weight_ent == 0.0:
                 loss = reg_loss_calc(pred, labels, reg_weights.to(device), args, class_weights)
@@ -985,7 +1079,10 @@ def test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, test
 
 #    if args.dataset == 'greenhouse':
 #        # TODO: Check
-    in_training_visualization_img(model, images, depths, labels, class_encoding, writer, round_idx, 'cbst_enet/test', device)
+    if args.use_depth:
+        in_training_visualization_img(model, images, depths, labels, class_encoding, writer, round_idx, 'cbst_enet/test', device)
+    else:
+        in_training_visualization_img(model, images, None, labels, class_encoding, writer, round_idx, 'cbst_enet/test', device)
 
     return
 
@@ -1392,6 +1489,27 @@ def adjust_learning_rate(optimizer, i_iter, tot_iter):
     lr = lr_poly(args.learning_rate, i_iter, tot_iter, args.power)
     optimizer.param_groups[0]['lr'] = lr
     # optimizer.param_groups[1]['lr'] = lr * 10
+
+def transfer_camvid_id_to_greenhouse(output_amax_np):
+
+    return id_camvid_to_greenhouse[output_amax_np]
+
+def transfer_camvid_output_to_greenhouse(output_camvid_np):
+   # output_greenhouse_np = np.array([]) #args.num_classes_seg
+    output_shape = (1, output_camvid_np.shape[1], output_camvid_np.shape[2])
+
+    # ID 0:traversable plant is not transfered from CamVid
+    output_greenhouse_np = np.zeros(output_shape)
+    for gh_class_id in range(1, args.num_classes_seg):
+        bool_index = id_camvid_to_greenhouse == gh_class_id
+        if bool_index.sum():
+            output_gh_class = output_camvid_np[bool_index].max(axis=0).reshape(output_shape)
+        else:
+            output_gh_class = np.zeros(output_shape)
+
+        output_greenhouse_np = np.append(output_greenhouse_np, output_gh_class, axis=0)
+
+    return output_greenhouse_np
 
 if __name__ == '__main__':
     main()
