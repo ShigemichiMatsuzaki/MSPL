@@ -196,7 +196,7 @@ def main(args):
     if args.use_depth:
         train_params = [{'params': model.get_basenet_params(), 'lr': args.lr},
                         {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult},
-                        {'params': model.get_depth_encoder_params(), 'lr': args.lr}]
+                        {'params': model.get_depth_encoder_params(), 'lr': args.lr * args.lr_mult}]
     else:
         train_params = [{'params': model.get_basenet_params(), 'lr': args.lr},
                         {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult}]
