@@ -11,6 +11,21 @@ from torchvision.transforms import functional as F
 import random
 
 GREENHOUSE_CLASS_LIST = ['end_of_plant', 'other_plant', 'artificial', 'ground', 'other']
+id_camvid_to_greenhouse = np.array([
+    4, # Sky
+    2, # Building
+    2, # Pole
+    3, # Road
+    3, # Pavement
+    1, # Tree
+    2, # SignSymbol
+    2, # Fence
+    2, # Car
+    4, # Pedestrian
+    4, # Bicyclist
+    2, # Road_marking(?)
+    4  # Unlabeled
+])
 
 class GreenhouseSegmentation(data.Dataset):
 
@@ -87,10 +102,11 @@ class GreenhouseSegmentation(data.Dataset):
 
 class GreenhouseRGBDSegmentation(data.Dataset):
 
-    def __init__(self, root=None, list_name=None, train=True, scale=(0.5, 2.0), size=(480, 256), use_depth=True, reg_weights=0.0):
+    def __init__(self, root=None, list_name=None, train=True, scale=(0.5, 2.0), size=(480, 256), use_depth=True, reg_weights=0.0, use_traversable=True):
         self.train = train
         self.use_depth = use_depth
         self.reg_weight = reg_weights
+        self.use_traversable = use_traversable
 #        if self.train:
         if root:
             data_file = os.path.join(root, list_name)
@@ -138,7 +154,8 @@ class GreenhouseRGBDSegmentation(data.Dataset):
         train_transforms = Compose(
             [
 #                RandomScale(scale=self.scale),
-                RandomCrop(crop_size=self.size),
+#                RandomCrop(crop_size=self.size),
+                Resize(size=self.size),
                 RandomFlip(),
                 #Normalize()
                 Tensorize()
@@ -172,6 +189,11 @@ class GreenhouseRGBDSegmentation(data.Dataset):
             depth_img = Image.fromarray(cv_depth)
 #            print(np.asarray(rgb_img))
 
+        if not self.use_traversable:
+            label_np = np.array(label_img, np.uint8)
+            label_np[label_np==0] = 1
+            label_img = Image.fromarray(label_np)
+
         if self.train:
             if self.use_depth:
                 rgb_img, label_img, depth_img = self.train_transforms(rgb_img, label_img, depth_img)
@@ -189,7 +211,7 @@ class GreenhouseRGBDSegmentation(data.Dataset):
         if self.use_depth:
             return rgb_img, label_img, depth_img, filename, self.reg_weight
         else:
-            return rgb_img, label_img, None, filename, self.reg_weight
+            return rgb_img, label_img, filename, self.reg_weight
 
 class GreenhouseDepth(data.Dataset):
 
@@ -232,8 +254,9 @@ class GreenhouseDepth(data.Dataset):
     def transforms(self):
         train_transforms = Compose(
             [
-                RandomScale(scale=self.scale),
-                RandomCrop(crop_size=self.size),
+#                RandomScale(scale=self.scale),
+                Resize(size=self.size),
+#                RandomCrop(crop_size=self.size),
                 RandomFlip()
             ]
         )
@@ -274,7 +297,7 @@ class GreenhouseDepth(data.Dataset):
 
 class GreenhouseRGBDSegCls(data.Dataset):
 
-    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 256), ignore_idx=4, use_depth=True):
+    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 256), ignore_idx=4, use_depth=True, use_traversable=False):
 
         self.train = train
         self.use_depth = use_depth
@@ -335,8 +358,9 @@ class GreenhouseRGBDSegCls(data.Dataset):
     def transforms(self):
         train_transforms = Compose(
             [
-                RandomScale(scale=self.scale),
-                RandomCrop(crop_size=self.size),
+#                RandomScale(scale=self.scale),
+#                RandomCrop(crop_size=self.size),
+                Resize(size=self.size),
                 RandomFlip(),
                 #Normalize()
                 Tensorize()
@@ -388,7 +412,10 @@ class GreenhouseRGBDSegCls(data.Dataset):
         # Get a file name
         filename = self.images[index].rsplit('/', 1)[1]
 
-        return rgb_img, label_img, depth_img, cls_id, filename
+        if self.use_depth:
+            return rgb_img, label_img, depth_img, cls_id, filename
+        else:
+            return rgb_img, label_img, cls_id, filename
 
 #
 # As a target dataset for training
@@ -405,7 +432,8 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
 
     def __init__(self, list_path, reg_weight = 0.0, rare_id = None,
                  mine_id = None, mine_chance = None, pseudo_root = None, max_iters=None,
-                 size=(256, 480), mean=(128, 128, 128), std = (1,1,1), scale=(0.5, 1.5), mirror=True, ignore_label=255, use_depth=True):
+                 size=(256, 480), mean=(128, 128, 128), std = (1,1,1), scale=(0.5, 1.5), mirror=True, ignore_label=255,
+                 use_traversable=False, use_depth=True):
         self.list_path = list_path
         self.pseudo_root = pseudo_root
         self.crop_h, self.crop_w = size
@@ -422,6 +450,7 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
         self.mine_id = mine_id
         self.mine_chance = mine_chance
         self.use_depth = use_depth
+        self.use_traversable = use_traversable
 
         self.images = []
         self.masks = []
@@ -460,7 +489,8 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
         train_transforms = Compose(
             [
 #                RandomScale(scale=self.scale),
-                RandomCrop(crop_size=(self.size[1], self.size[0])),
+#                RandomCrop(crop_size=(self.size[1], self.size[0])),
+                Resize(size=(self.size[1], self.size[0])),
                 RandomFlip(),
                 #Normalize()
                 Tensorize()
@@ -498,14 +528,20 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
         '''
         Open a depth image using OpenCV instead of PIL to deal with int16 format of the image
         '''
-        cv_depth = cv2.imread(self.depths[index], cv2.IMREAD_GRAYSCALE)
-        # cv_depth = cv2.medianBlur(cv_depth, 7)
-        #cv_depth = np.where(cv_depth < 10, cv_depth, 10) * (255 // 10)
-        cv_depth.astype(np.uint8)
-        #print(cv_depth)
-        #print(np.histogram(cv_depth, bins=10))
-        depth_img = Image.fromarray(cv_depth)
+        if self.use_depth:
+            cv_depth = cv2.imread(self.depths[index], cv2.IMREAD_GRAYSCALE)
+            # cv_depth = cv2.medianBlur(cv_depth, 7)
+            #cv_depth = np.where(cv_depth < 10, cv_depth, 10) * (255 // 10)
+            cv_depth.astype(np.uint8)
+            #print(cv_depth)
+            #print(np.histogram(cv_depth, bins=10))
+            depth_img = Image.fromarray(cv_depth)
 #            print(np.asarray(rgb_img))
+
+        if not self.use_traversable:
+            label_np = np.array(label_img, np.uint8)
+            label_np[label_np==0] = 1
+            label_img = Image.fromarray(label_np)
 
 #        if self.train:
 #        else:
@@ -513,7 +549,8 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
         #
         image = np.asarray(rgb_img, np.float32).copy()
         label = np.asarray(label_img, np.float32).copy()
-        depth = np.asarray(depth_img, np.float32).copy()
+        if self.use_depth:
+            depth = np.asarray(depth_img, np.float32).copy()
 
         size = image.shape
         (img_h, img_w) = label.shape
@@ -536,9 +573,10 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
             depth_pad = cv2.copyMakeBorder(
                 depth, 0, pad_h, 0,
                 pad_w, cv2.BORDER_CONSTANT,
-                value=(0.0, 0.0, 0.0))
+                value=(0.0, 0.0, 0.0)) if self.use_depth else None
         else:
-            img_pad, label_pad, depth_pad = image, label, depth
+            img_pad, label_pad = image, label
+            depth_pad = depth if self.use_depth else None
 
         img_h, img_w = label_pad.shape
         # mining or not
@@ -585,15 +623,21 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
 
         image = np.asarray(img_pad[h_off : h_off+self.crop_h, w_off : w_off+self.crop_w],   np.uint8)
         label = np.asarray(label_pad[h_off : h_off+self.crop_h, w_off : w_off+self.crop_w], np.uint8)
-        depth = np.asarray(depth_pad[h_off : h_off+self.crop_h, w_off : w_off+self.crop_w], np.uint8)
+        if self.use_depth:
+            depth = np.asarray(depth_pad[h_off : h_off+self.crop_h, w_off : w_off+self.crop_w], np.uint8)
 #        image = image[:, :, ::-1]  # change to RGB
 #        image = image.transpose((2, 0, 1))
 #        if self.is_mirror:
 #            flip = np.random.choice(2) * 2 - 1
 #            image = image[:, :, ::flip]
 #            label = label[:, ::flip]
+        if self.use_depth:
+            rgb_img, label_img, depth_img = self.train_transforms(Image.fromarray(image), Image.fromarray(label), Image.fromarray(depth))
 
-        rgb_img, label_img, depth_img = self.train_transforms(Image.fromarray(image), Image.fromarray(label), Image.fromarray(depth))
+            return rgb_img, label_img, depth_img, img_name, self.reg_weight
+        else:
+            rgb_img, label_img = self.train_transforms(Image.fromarray(image), Image.fromarray(label))
 
-        return rgb_img, label_img, depth_img, img_name, self.reg_weight
+            return rgb_img, label_img, img_name, self.reg_weight
+
 
