@@ -6,16 +6,17 @@ __maintainer__ = "Sachin Mehta"
 
 import argparse
 import os
+import datetime
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
-from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img
+from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, calc_cls_class_weight
 from utilities.train_eval_seg import train_seg as train
 from utilities.train_eval_seg import val_seg as val
 # from torch.utils.tensorboard import SummaryWriter
 from tensorboardX import SummaryWriter
-from loss_fns.segmentation_loss import SegmentationLoss
+from loss_fns.segmentation_loss import SegmentationLoss, NIDLoss
 import random
 import math
 import time
@@ -72,7 +73,7 @@ def main(args):
 
     elif args.dataset == 'greenhouse':
         print(args.use_depth)
-        from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
+        from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST, color_encoding
         train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='train_greenhouse_gt.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
         val_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='val_greenhouse.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
         class_weights = np.load('class_weights.npy')# [:4]
@@ -81,13 +82,13 @@ def main(args):
 
         print(GREENHOUSE_CLASS_LIST)
         seg_classes = len(GREENHOUSE_CLASS_LIST)
-        color_encoding = OrderedDict([
-            ('end_of_plant', (0, 255, 0)),
-            ('other_part_of_plant', (0, 255, 255)),
-            ('artificial_objects', (255, 0, 0)),
-            ('ground', (255, 255, 0)),
-            ('background', (0, 0, 0))
-        ])
+#        color_encoding = OrderedDict([
+#            ('end_of_plant', (0, 255, 0)),
+#            ('other_part_of_plant', (0, 255, 255)),
+#            ('artificial_objects', (255, 0, 0)),
+#            ('ground', (255, 255, 0)),
+#            ('background', (0, 0, 0))
+#        ])
     elif args.dataset == 'ishihara':
         print(args.use_depth)
         from data_loader.segmentation.ishihara_rgbd import IshiharaRGBDSegmentation, ISHIHARA_RGBD_CLASS_LIST
@@ -143,12 +144,22 @@ def main(args):
         print(args.use_depth)
         from data_loader.segmentation.camvid import CamVidSegmentation, CAMVID_CLASS_LIST, color_encoding
         train_dataset = CamVidSegmentation(
-            root=args.data_path, list_name='train_camvid.txt', train=True, size=crop_size, scale=args.scale)
+            root=args.data_path, list_name='train_camvid.txt', 
+            train=True, size=crop_size, scale=args.scale, label_conversion=args.label_conversion)
         val_dataset = CamVidSegmentation(
-            root=args.data_path, list_name='val_camvid.txt', train=False, size=crop_size, scale=args.scale)
+            root=args.data_path, list_name='val_camvid.txt',
+            train=False, size=crop_size, scale=args.scale, label_conversion=args.label_conversion)
 
-        seg_classes = len(CAMVID_CLASS_LIST)
-        class_wts = torch.ones(seg_classes)
+        if args.label_conversion:
+            from data_loader.segmentation.greenhouse import GREENHOUSE_CLASS_LIST, color_encoding
+            seg_classes = len(GREENHOUSE_CLASS_LIST)
+            class_wts = torch.ones(seg_classes)
+        else:
+            seg_classes = len(CAMVID_CLASS_LIST)
+            tmp_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False)
+            class_wts = calc_cls_class_weight(tmp_loader, seg_classes)
+            print("class weights : {}".format(class_wts))
+            class_wts = torch.from_numpy(class_wts).float().to(device)
 
         args.use_depth = False
     else:
@@ -236,6 +247,7 @@ def main(args):
     criterion = SegmentationLoss(n_classes=seg_classes, loss_type=args.loss_type,
                                  device=device, ignore_idx=args.ignore_idx,
                                  class_wts=class_wts.to(device))
+    nid_loss = NIDLoss(image_bin=32, label_bin=seg_classes) if args.use_nid else None
 
     if num_gpus >= 1:
         if num_gpus == 1:
@@ -245,12 +257,17 @@ def main(args):
             model = DataParallel(model)
             model = model.cuda()
             criterion = criterion.cuda()
+            if args.use_nid:
+                nid_loss.cuda()
         else:
             from utilities.parallel_wrapper import DataParallelModel, DataParallelCriteria
             model = DataParallelModel(model)
             model = model.cuda()
             criterion = DataParallelCriteria(criterion)
             criterion = criterion.cuda()
+            if args.use_nid:
+                nid_loss = DataParallelCriteria(nid_loss)
+                nid_loss = nid_loss.cuda()
 
         if torch.backends.cudnn.is_available():
             import torch.backends.cudnn as cudnn
@@ -259,7 +276,7 @@ def main(args):
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                                                pin_memory=True, num_workers=args.workers)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=64, shuffle=False,
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=20, shuffle=False,
                                              pin_memory=True, num_workers=args.workers)
 
     if args.scheduler == 'fixed':
@@ -308,8 +325,9 @@ def main(args):
 
         print_info_message(
             'Running epoch {} with learning rates: base_net {:.6f}, segment_net {:.6f}'.format(epoch, lr_base, lr_seg))
-        miou_train, train_loss = train(model, train_loader, optimizer, criterion, seg_classes, epoch, device=device, use_depth=args.use_depth)
-        miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device, use_depth=args.use_depth)
+        miou_train, train_loss = train(
+            model, train_loader, optimizer, criterion, seg_classes, epoch, device=device, use_depth=args.use_depth, add_criterion=nid_loss)
+        miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device, use_depth=args.use_depth, add_criterion=nid_loss)
 
         batch_train = iter(train_loader).next()
         batch = iter(val_loader).next()
@@ -443,6 +461,8 @@ if __name__ == "__main__":
     parser.add_argument('--use-depth', default=False, type=bool, help='Use depth')
     parser.add_argument('--trainable-fusion', default=False, type=bool, help='Use depth')
     parser.add_argument('--dense-fuse', default=False, type=bool, help='Use depth')
+    parser.add_argument('--label-conversion', default=False, type=bool, help='Use label conversion in CamVid')
+    parser.add_argument('--use-nid', default=False, type=bool, help='Use NID loss')
 
     args = parser.parse_args()
 
@@ -494,7 +514,10 @@ if __name__ == "__main__":
     assert args.data_path != '', 'Dataset path is an empty string. Please check.'
 
     args.crop_size = tuple(args.crop_size)
-    timestr = time.strftime("%Y%m%d-%H%M%S")
+    #timestr = time.strftime("%Y%m%d-%H%M%S")
+    now = datetime.datetime.now()
+    now += datetime.timedelta(hours=9)
+    timestr = now.strftime("%Y%m%d-%H%M%S")
     use_depth_str = "_rgbd" if args.use_depth else "_rgb"
     if args.use_depth:
         trainable_fusion_str = "_gated" if args.trainable_fusion else "_naive"

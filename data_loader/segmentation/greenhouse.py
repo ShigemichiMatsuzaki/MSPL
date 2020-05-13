@@ -9,6 +9,7 @@ from collections import OrderedDict
 import numpy as np
 from torchvision.transforms import functional as F
 import random
+from data_loader.segmentation.utils import get_label_from_superpixel
 
 GREENHOUSE_CLASS_LIST = ['end_of_plant', 'other_plant', 'artificial', 'ground', 'other']
 id_camvid_to_greenhouse = np.array([
@@ -26,6 +27,15 @@ id_camvid_to_greenhouse = np.array([
     2, # Road_marking(?)
     4  # Unlabeled
 ])
+
+color_encoding = OrderedDict([
+    ('end_of_plant', (0, 255, 0)),
+    ('other_part_of_plant', (0, 255, 255)),
+    ('artificial_objects', (255, 0, 0)),
+    ('ground', (255, 255, 0)),
+    ('background', (0, 0, 0))
+])
+
 
 class GreenhouseSegmentation(data.Dataset):
 
@@ -69,7 +79,7 @@ class GreenhouseSegmentation(data.Dataset):
     def transforms(self):
         train_transforms = Compose(
             [
-                RandomScale(scale=self.scale),
+                # RandomScale(scale=self.scale),
                 RandomCrop(crop_size=self.size),
                 RandomFlip(),
                 Normalize()
@@ -433,7 +443,7 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
     def __init__(self, list_path, reg_weight = 0.0, rare_id = None,
                  mine_id = None, mine_chance = None, pseudo_root = None, max_iters=None,
                  size=(256, 480), mean=(128, 128, 128), std = (1,1,1), scale=(0.5, 1.5), mirror=True, ignore_label=255,
-                 use_traversable=False, use_depth=True):
+                 use_traversable=False, use_depth=True, use_label_prop=True):
         self.list_path = list_path
         self.pseudo_root = pseudo_root
         self.crop_h, self.crop_w = size
@@ -451,6 +461,7 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
         self.mine_chance = mine_chance
         self.use_depth = use_depth
         self.use_traversable = use_traversable
+        self.use_label_prop = use_label_prop
 
         self.images = []
         self.masks = []
@@ -512,19 +523,19 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
 #
 #        return len(self.files)
 
-    def generate_scale_label(self, image, label):
-        # f_scale = 0.5 + random.randint(0, 11) / 10.0
-        f_scale = self.lscale + random.randint(0, int((self.hscale-self.lscale)*10)) / 10.0
-        image = cv2.resize(image, None, fx=f_scale, fy=f_scale, interpolation = cv2.INTER_LINEAR)
-        label = cv2.resize(label, None, fx=f_scale, fy=f_scale, interpolation = cv2.INTER_NEAREST)
-        return image, label
+#    def generate_scale_label(self, image, label):
+#        # f_scale = 0.5 + random.randint(0, 11) / 10.0
+#        f_scale = self.lscale + random.randint(0, int((self.hscale-self.lscale)*10)) / 10.0
+#        image = cv2.resize(image, None, fx=f_scale, fy=f_scale, interpolation = cv2.INTER_LINEAR)
+#        label = cv2.resize(label, None, fx=f_scale, fy=f_scale, interpolation = cv2.INTER_NEAREST)
+#        return image, label
 
     def __getitem__(self, index):
 #        datafiles = self.files[index]
 
         img_name = self.images[index].rsplit('/', 1)[1]
-        rgb_img = Image.open(self.images[index]).convert('RGB')
-        label_img = Image.open(self.masks[index])
+        rgb_img = Image.open(self.images[index]).convert('RGB').resize((self.size[1], self.size[0]))
+        label_img = Image.open(self.masks[index]).resize((self.size[1], self.size[0]))
         '''
         Open a depth image using OpenCV instead of PIL to deal with int16 format of the image
         '''
@@ -535,7 +546,7 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
             cv_depth.astype(np.uint8)
             #print(cv_depth)
             #print(np.histogram(cv_depth, bins=10))
-            depth_img = Image.fromarray(cv_depth)
+            depth_img = Image.fromarray(cv_depth).resize((self.size[1], self.size[0]))
 #            print(np.asarray(rgb_img))
 
         if not self.use_traversable:
@@ -580,7 +591,8 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
 
         img_h, img_w = label_pad.shape
         # mining or not
-        mine_flag = random.uniform(0, 1) < self.mine_chance
+        #mine_flag = random.uniform(0, 1) < self.mine_chance
+        mine_flag = False
         if mine_flag and len(self.mine_id) > 0:
             label_unique = np.unique(label_pad)
             mine_id_temp = np.array([a for a in self.mine_id if a in label_unique]) # if this image has the mine id
@@ -623,14 +635,19 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
 
         image = np.asarray(img_pad[h_off : h_off+self.crop_h, w_off : w_off+self.crop_w],   np.uint8)
         label = np.asarray(label_pad[h_off : h_off+self.crop_h, w_off : w_off+self.crop_w], np.uint8)
+#        image = np.asarray(rgb_img, np.uint8)
+#        label = np.asarray(label_np, np.uint8)
+
         if self.use_depth:
-            depth = np.asarray(depth_pad[h_off : h_off+self.crop_h, w_off : w_off+self.crop_w], np.uint8)
-#        image = image[:, :, ::-1]  # change to RGB
-#        image = image.transpose((2, 0, 1))
-#        if self.is_mirror:
-#            flip = np.random.choice(2) * 2 - 1
-#            image = image[:, :, ::flip]
-#            label = label[:, ::flip]
+#            depth = np.asarray(depth_pad[h_off : h_off+self.crop_h, w_off : w_off+self.crop_w], np.uint8)
+            depth = np.asarray(depth_img, np.uint8).copy()
+
+        if self.use_label_prop:
+#            rgb_img_tmp = rgb_img.resize((label.shape[1], label.shape[0]))
+            label = get_label_from_superpixel(
+                rgb_img_np=image, label_img_np=label, sp_type='watershed')
+            label_img = Image.fromarray(label)
+
         if self.use_depth:
             rgb_img, label_img, depth_img = self.train_transforms(Image.fromarray(image), Image.fromarray(label), Image.fromarray(depth))
 

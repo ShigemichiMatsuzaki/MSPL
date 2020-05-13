@@ -210,7 +210,7 @@ def calc_cls_class_weight(data_loader, class_num):
     class_array = np.zeros(class_num).astype(np.float32)
 
     for n, batch in enumerate(data_loader):
-        cls_ids = batch[3].numpy()
+        cls_ids = batch[1].numpy()
         for i in range(0, class_num):
             class_array[i] += (cls_ids == i).sum()
 

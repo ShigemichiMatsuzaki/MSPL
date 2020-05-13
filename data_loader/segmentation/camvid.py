@@ -41,9 +41,25 @@ color_encoding = OrderedDict([
     ('Unlabelled', (0,0,0))
 ])
 
+id_camvid_to_greenhouse = np.array([
+    4, # Sky
+    2, # Building
+    2, # Pole
+    3, # Road
+    3, # Pavement
+    1, # Tree
+    2, # SignSymbol
+    2, # Fence
+    2, # Car
+    4, # Pedestrian
+    4, # Bicyclist
+    2, # Road_marking(?)
+    4  # Unlabeled
+])
+
 class CamVidSegmentation(data.Dataset):
 
-    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(360, 480), ignore_idx=255):
+    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(360, 480), ignore_idx=255, label_conversion=False):
 
         self.train = train
         data_file = os.path.join(root, list_name)
@@ -62,6 +78,8 @@ class CamVidSegmentation(data.Dataset):
                 self.images.append(rgb_img_loc)
                 self.masks.append(label_img_loc)
 
+        self.label_conversion = label_conversion
+        
         if isinstance(size, tuple):
             self.size = size
         else:
@@ -78,8 +96,9 @@ class CamVidSegmentation(data.Dataset):
     def transforms(self):
         train_transforms = Compose(
             [
-                RandomScale(scale=self.scale),
-                RandomCrop(crop_size=self.size),
+#                RandomScale(scale=self.scale),
+#                RandomCrop(crop_size=self.size),
+                Resize(size=self.size),
                 RandomFlip(),
 #                Normalize()
                 Tensorize()
@@ -101,12 +120,21 @@ class CamVidSegmentation(data.Dataset):
         rgb_img = Image.open(self.images[index]).convert('RGB')
         label_img = Image.open(self.masks[index])
 
+        if self.label_conversion:
+            label_np = np.array(label_img, np.int8)
+            label_np = id_camvid_to_greenhouse[label_np]
+            label_np = np.array(label_np, np.uint8)
+        
+            label_img = Image.fromarray(label_np)
+
         if self.train:
             rgb_img, label_img = self.train_transforms(rgb_img, label_img)
         else:
             rgb_img, label_img = self.val_transforms(rgb_img, label_img)
 
+
         # Get a file name
         filename = self.images[index].rsplit('/', 1)[1]
 
-        return rgb_img, label_img, filename
+        return rgb_img, label_img, filename, 0.0
+

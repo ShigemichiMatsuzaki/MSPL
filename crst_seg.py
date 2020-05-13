@@ -30,11 +30,12 @@ import numpy as np
 import shutil
 import random
 
-from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, set_logger
+from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, set_logger, calc_cls_class_weight
 from utilities.utils import AverageMeter
 from utilities.metrics.segmentation_miou import MIOU
 from utilities.train_eval_seg import train_seg as train
 from utilities.train_eval_seg import val_seg as val
+from loss_fns.segmentation_loss import NIDLoss
 
 ###
 # Matsuzaki
@@ -278,6 +279,9 @@ def get_arguments():
                         help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
     parser.add_argument("--use-traversable", type=str, default=False, dest='use_traversable',
                         help="Whether to use a class 'traversable plant'")
+    parser.add_argument("--early-stop", type=str, default=False, dest='early_stop',
+                        help="Whether to stop the training if the mean IoU is substancially degraded")
+    parser.add_argument('--use-nid', default=False, type=bool, help='Use NID loss')
 
     return parser.parse_args()
 
@@ -360,16 +364,16 @@ def main():
     if args.dataset == 'greenhouse':
         from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
 
-        train_dataset = GreenhouseRGBDSegmentation(
-            list_name=args.data_src_list, train=True,
-            size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
-
-        val_dataset = GreenhouseRGBDSegmentation(
-                list_name=args.data_tgt_test_list, train=False,
-                size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
+#        train_dataset = GreenhouseRGBDSegmentation(
+#            list_name=args.data_src_list, train=True,
+#            size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
+#
+#        val_dataset = GreenhouseRGBDSegmentation(
+#                list_name=args.data_tgt_test_list, train=False,
+#                size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
 
         class_weights = np.load('class_weights.npy')[:4]
-        class_wts = torch.from_numpy(class_weights).float().to(device)
+        class_weights = torch.from_numpy(class_weights).float().to(device)
 
         seg_classes = len(GREENHOUSE_CLASS_LIST)
         class_encoding = OrderedDict([
@@ -401,7 +405,7 @@ def main():
 
         # Import pretrained model trained for giving initial pseudo-labels
         if args.outsource == 'camvid':
-            model = espdnet_seg_with_pre_rgbd(args)
+            model = espdnet_seg_with_pre_rgbd(args, load_entire_weights=True)
 
             tmp_args = copy.deepcopy(args)
             tmp_args.trainable_fusion = False
@@ -411,13 +415,26 @@ def main():
             tmp_args.dataset = 'camvid'
             tmp_args.weights = args.outsource_weights
             model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+
+            from data_loader.segmentation.camvid import CamVidSegmentation
+            ds = CamVidSegmentation(
+                root='', list_name=args.data_src_list, train=True, label_conversion=True)
+            tmp_loader = torch.utils.data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
+            
+            print("Calculate class weights!")
+            class_weights = calc_cls_class_weight(tmp_loader, args.num_classes_seg)
+            print(class_weights)
+            class_weights = torch.from_numpy(class_weights).float().to(device)
         elif args.outsource is None:
             model = espdnet_seg_with_pre_rgbd(args)
 
     print("Model {} is load successfully!".format(args.restore_from))
 
     # List of training images
-    image_src_list, _, label_src_list, depth_src_list, src_num = parse_split_list(args.data_src_list)
+    if args.use_depth:
+        image_src_list, _, label_src_list, depth_src_list, src_num = parse_split_list(args.data_src_list)
+    else:
+        image_src_list, _, label_src_list, depth_src_list, src_num = parse_split_list(args.data_src_list)
     image_tgt_list, image_name_tgt_list, _, depth_tgt_list, tgt_num = parse_split_list(args.data_tgt_train_list)
     # print("tgt_num", tgt_num)
     _, _, _, _, test_num = parse_split_list(args.data_tgt_test_list)
@@ -443,12 +460,15 @@ def main():
     metric = None
     print("Let's start! Hey hey!")
 
+    nid_loss = NIDLoss(image_bin=32, label_bin=seg_classes) if args.use_nid else None
+
     # 
     # Main loop
     #
     writer_idx = 0
-    class_weights = None
+    #class_weights = None
     writer = SummaryWriter(save_path)
+    old_miou = -0.0
     for round_idx in range(args.num_rounds):
         ### Preparation
 #        save_round_eval_path = osp.join(args.save,str(round_idx))
@@ -523,15 +543,15 @@ def main():
                     from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation
                     from data_loader.segmentation.greenhouse import GreenhouseRGBDStMineDataSet
                     from data_loader.segmentation.greenhouse import GREENHOUSE_CLASS_LIST
+                    from data_loader.segmentation.camvid import CamVidSegmentation
 
                     print(src_train_lst)
                     # Import source dataset (with manual labels)
-                    srctrainset = GreenhouseRGBDSegmentation(
-                        list_name=args.data_src_list, train=True, 
-                        size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
-#                    srctrainset = Greenhouse(
-#                        args.data_src_dir, list_path=src_train_lst, transform=image_transform,
-#                        label_transform=label_transform, reg_weight=reg_weight_src)
+#                    srctrainset = GreenhouseRGBDSegmentation(
+#                        list_name=src_train_lst, train=True, 
+#                        size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
+                    srctrainset = CamVidSegmentation(
+                        root='', list_name=src_train_lst, size=args.crop_size, scale=args.scale, train=True, label_conversion=True)
 
                     # Initialize the class weights 
                     if class_weights is None:
@@ -605,15 +625,22 @@ def main():
                 #  train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx, epoch, args, logger)
                 writer_idx = train(
                     mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx, 
-                    epoch, args, logger, metric, class_encoding, writer_idx, class_weights, writer)
+                    epoch, args, logger, metric, class_encoding, writer_idx, class_weights, writer, nid_loss)
 
             end = timeit.default_timer()
             logger.info('###### Finish model retraining dataset in round {}! Time cost: {:.2f} seconds. ######'.format(round_idx, end - start))
 
             # test self-trained model in target domain test set
             tgt_set = 'test'
-            test(model, device, save_round_eval_path, round_idx+1, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
-                 valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
+            new_miou = test(model, device, save_round_eval_path, round_idx+1, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+                            valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
+
+            if args.early_stop and old_miou - new_miou > 0.1:
+                logger.info(
+                    '###### Accuracy degraded too much. ({} -> {}) Sorry, no hope. ######'.format(old_miou, new_miou))
+
+                return
+
         elif round_idx == args.num_rounds - 1:
             shutil.rmtree(save_pseudo_label_path)
             tgt_set = 'train'
@@ -736,6 +763,7 @@ def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, val
     
                 # save class-wise confidence maps
                 #
+                old_miou = -0.0
                 # 'conf' : Save the probabilities of pixel where the class idx_cls is the max
                 #
                 if args.kc_value == 'conf':
@@ -797,12 +825,13 @@ def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, val
     return conf_dict, pred_cls_num, save_prob_path, save_pred_path  # return the dictionary containing all the class-wise confidence vectors
 
 def train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx, epoch_idx,
-          args, logger, metric, class_encoding, writer_idx, class_weights=None, writer=None):
+          args, logger, metric, class_encoding, writer_idx, class_weights=None, writer=None, add_loss=None):
     """Create the model and start the training."""
     epoch_loss = 0
     
     # For logging the training status
     losses = AverageMeter()
+    nid_losses = AverageMeter()
     batch_time = AverageMeter()
     inter_meter = AverageMeter()
     union_meter = AverageMeter()
@@ -842,6 +871,11 @@ def train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx
             if args.lr_weight_ent > 0.0:
                 loss = reg_loss_calc_expand(pred, labels, reg_weights.to(device), args)
 
+            if add_loss is not None:
+                loss2 = add_loss(images, pred.to(device))
+                nid_losses.update(loss2.item(), 1)
+                loss += loss2
+
             inter, union = miou_class.get_iou(pred, labels)
     
             inter_meter.update(inter)
@@ -865,6 +899,7 @@ def train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx
 
     # Write summary
     writer.add_scalar('cbst_enet/train/loss', losses.avg, writer_idx)
+    writer.add_scalar('cbst_enet/train/nid_loss', nid_losses.avg, writer_idx)
     writer.add_scalar('cbst_enet/train/mean_IoU', miou, writer_idx)
     writer.add_scalar('cbst_enet/train/traversable_plant_IoU', iou[0], writer_idx)
     writer.add_scalar('cbst_enet/train/other_plant_mean_IoU', iou[1], writer_idx)
@@ -1084,7 +1119,7 @@ def test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, test
     else:
         in_training_visualization_img(model, images, None, labels, class_encoding, writer, round_idx, 'cbst_enet/test', device)
 
-    return
+    return miou
 
 def kc_parameters(conf_dict, pred_cls_num, tgt_portion, round_idx, save_stats_path, args, logger):
     logger.info('###### Start kc generation in round {} ! ######'.format(round_idx))
@@ -1232,7 +1267,7 @@ def parse_split_list(list_name):
     image_list = []
     image_name_list = []
     label_list = []
-    depth_list = []
+    depth_list = [] if args.use_depth else None
     file_num = 0
     with open(list_name) as f:
         for item in f.readlines():
@@ -1246,7 +1281,9 @@ def parse_split_list(list_name):
             image_list.append(fields[0])
             image_name_list.append(image_name)
             label_list.append(fields[1])
-            depth_list.append(fields[2])
+            if depth_list is not None:
+                depth_list.append(fields[2])
+
             file_num += 1
 
     return image_list, image_name_list, label_list, depth_list, file_num
@@ -1261,14 +1298,19 @@ def savelst_SrcTgt(
     sel_idx = list( np.random.choice(src_num, src_num_sel, replace=False) )
     sel_src_img_list = list( itemgetter(*sel_idx)(image_src_list) )
     sel_src_label_list = list(itemgetter(*sel_idx)(label_src_list))
-    sel_src_depth_list = list(itemgetter(*sel_idx)(depth_src_list))
+    if depth_src_list is not None:
+        sel_src_depth_list = list(itemgetter(*sel_idx)(depth_src_list))
     src_train_lst = osp.join(save_lst_path,'src_train.lst')
     tgt_train_lst = osp.join(save_lst_path, 'tgt_train.lst')
 
     # generate src train list
     with open(src_train_lst, 'w') as f:
         for idx in range(src_num_sel):
-            f.write("%s,%s,%s\n" % (sel_src_img_list[idx], sel_src_label_list[idx], sel_src_depth_list[idx]))
+            if depth_src_list is not None:
+                f.write("%s,%s,%s\n" % (sel_src_img_list[idx], sel_src_label_list[idx], sel_src_depth_list[idx]))
+            else:
+                f.write("%s,%s\n" % (sel_src_img_list[idx], sel_src_label_list[idx]))
+
     # generate tgt train list
     if args.lr_weight_ent > 0:
         with open(tgt_train_lst, 'w') as f:
@@ -1281,7 +1323,10 @@ def savelst_SrcTgt(
         with open(tgt_train_lst, 'w') as f:
             for idx in range(tgt_num):
                 image_tgt_path = osp.join(save_pseudo_label_path, image_name_tgt_list[idx])
-                f.write("%s,%s,%s\n" % (image_tgt_list[idx], image_tgt_path, depth_tgt_list[idx]))
+                if depth_tgt_list is not None:
+                    f.write("%s,%s,%s\n" % (image_tgt_list[idx], image_tgt_path, depth_tgt_list[idx]))
+                else:
+                    f.write("%s,%s\n" % (image_tgt_list[idx], image_tgt_path))
 
     return src_train_lst, tgt_train_lst, src_num_sel
 

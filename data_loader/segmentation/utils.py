@@ -17,7 +17,7 @@ def propagate_max_label_in_sp(sp):
     valid_label_num = label_hist[0:4].sum()
     argmax = np.argmax(label_hist[0:4])
 #    print(valid_label_num[valid_label_num==argmax].sum() / float(sp.size))
-    print("portion : {}".format(label_hist[argmax] / float(sp.size)))
+#    print("portion : {}".format(label_hist[argmax] / float(sp.size)))
     if valid_label_num and label_hist[argmax] / float(sp.size) > 0.3:
         return argmax
     else:
@@ -25,6 +25,7 @@ def propagate_max_label_in_sp(sp):
 
 def get_label_from_superpixel(rgb_img_np, label_img_np, sp_type='watershed'):
     rgb_img_np = skimage.util.img_as_float(rgb_img_np)
+#    print(rgb_img_np.shape) 
 
     # Superpixel segmentation
     if sp_type == 'watershed':
@@ -44,26 +45,30 @@ def get_label_from_superpixel(rgb_img_np, label_img_np, sp_type='watershed'):
         index = superpixels == (i+1)
     
         # Get labels within the superpixel
-        labels_in_sp = label_img[index]
+        labels_in_sp = label_img_np[index]
     
         # Get a label id that should be propagated within the superpixel
         max_label = propagate_max_label_in_sp(labels_in_sp)
     
         # Substitute the label in all pixels in the superpixel
-        new_label_img[index] = max_label
-
+        if max_label != 4:
+            new_label_img[index] = max_label
+        else:
+            new_label_img[index] = labels_in_sp
+            
     return new_label_img
 
 def main():
     filename = "26_0_000000.png"
-    img = skimage.util.img_as_float( plt.imread('train/' + filename) )
+    img = skimage.util.img_as_float( plt.imread('/media/data/dataset/matsuzaki/greenhouse/train/' + filename) )
+    print(img.shape)
     superpixels = skimage.segmentation.watershed( skimage.filters.sobel( skimage.color.rgb2gray( img ) ), markers=250, compactness=0.001) 
     #superpixels = skimage.segmentation.quickshift(img, kernel_size=3, max_dist=6, ratio=0.5) 
     #superpixels = skimage.segmentation.felzenszwalb(img,scale=100, sigma=0.5, min_size=50)
     #superpixels = skimage.segmentation.slic(img, n_segments=250, compactness=10, sigma=1)
     
     # label_img = skimage.util.img_as_float( plt.imread('trainannot/' + filename) )
-    label_img = np.array(Image.open('trainannot/' + filename))
+    label_img = np.array(Image.open('/media/data/dataset/matsuzaki/greenhouse/trainannot/' + filename))
     
     new_label_img = np.zeros(label_img.shape) 
     for i in range(0, superpixels.max()):
@@ -85,7 +90,7 @@ def main():
                255, 255, 0,
                0, 0, 0]
     
-    print(new_label_img)
+#    print(new_label_img)
     index_image = Image.fromarray(np.uint8(new_label_img)).convert("P")
     index_image.putpalette(palette)
     
