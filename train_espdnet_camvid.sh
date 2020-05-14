@@ -10,6 +10,7 @@ CUDA_VISIBLE_DEVICES=1 python train_segmentation.py \
   --lr 0.009 \
   --scheduler hybrid \
   --clr-max 61 \
+  --use-nid true \
   --epochs 500
 
 # CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \

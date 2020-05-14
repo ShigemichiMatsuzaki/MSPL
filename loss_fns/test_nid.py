@@ -52,7 +52,6 @@ def main():
 #        print("p_cl : {}, p_c : {}, p_l : {}".format(p_cl.sum(), p_c.sum(), p_l.sum()))
 #        print(p_cl.size(), p_c.size(), p_l.size()) 
         loss = nid.nid(p_cl, p_c.reshape(p_c.size()[0], 1), p_l.reshape(p_l.size()[0], 1))
-        
         print("loss : {}".format(loss.item()))
 
 if __name__ == '__main__':

@@ -526,8 +526,13 @@ def main():
 
             # Initial test
             tgt_set = 'test'
-            test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
-                 valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
+            if round_idx:
+                test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+                               valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
+            else:
+                # Get the initial IoU in the first round for early stop
+                old_miou = test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+                               valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
 
             ### patch mining params
             # no patch mining in src
@@ -635,7 +640,7 @@ def main():
             new_miou = test(model, device, save_round_eval_path, round_idx+1, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
                             valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
 
-            if args.early_stop and old_miou - new_miou > 0.1:
+            if args.early_stop and old_miou - new_miou > 10.0:
                 logger.info(
                     '###### Accuracy degraded too much. ({} -> {}) Sorry, no hope. ######'.format(old_miou, new_miou))
 
