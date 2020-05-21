@@ -282,6 +282,7 @@ def get_arguments():
     parser.add_argument("--early-stop", type=str, default=False, dest='early_stop',
                         help="Whether to stop the training if the mean IoU is substancially degraded")
     parser.add_argument('--use-nid', default=False, type=bool, help='Use NID loss')
+    parser.add_argument('--nid-bin', default=32, type=int, help='Bin size of an image intensity histogram in calculating  NID loss')
 
     return parser.parse_args()
 
@@ -332,11 +333,12 @@ def main():
         trainable_fusion_str = ""
 
     outsource_str = "_os_" + args.outsource if args.outsource else ""
+    loss_str = "_nid_{}".format(args.nid_bin) if args.use_nid else ""
 
-    args.savedir = '{}/model_{}_{}/s_{}_res_{}_crst{}{}_tgtinit_{}_tgtstep_{}_mr_{}/{}'.format(
+    args.savedir = '{}/model_{}_{}/s_{}_res_{}_crst{}{}_tgtinit_{}_tgtstep_{}_mr_{}{}/{}'.format(
         args.save, args.model, args.dataset,
         args.s, args.crop_size[0], use_depth_str, trainable_fusion_str,
-        args.init_tgt_port, args.tgt_port_step, args.mr_weight_kld, 
+        args.init_tgt_port, args.tgt_port_step, args.mr_weight_kld, loss_str,
         timestr)
 
     if not os.path.isdir(args.savedir):
@@ -460,7 +462,7 @@ def main():
     metric = None
     print("Let's start! Hey hey!")
 
-    nid_loss = NIDLoss(image_bin=32, label_bin=seg_classes) if args.use_nid else None
+    nid_loss = NIDLoss(image_bin=args.nid_bin, label_bin=seg_classes) if args.use_nid else None
 
     # 
     # Main loop

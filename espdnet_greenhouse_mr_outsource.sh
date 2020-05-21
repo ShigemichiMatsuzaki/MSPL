@@ -1,5 +1,6 @@
-for mr in 0.1 0.2 0.3 0.4 0.5; do
-for tgt_port in 0.1 0.2 0.3 0.4 0.5; do
+for mr in 0.1 0.3 0.5; do
+for tgt_port in 0.5; do
+for nid_bin in 64 128 256; do
 CUDA_VISIBLE_DEVICES=0 python crst_seg.py \
     --random-mirror \
     --test-scale 1.0 \
@@ -29,10 +30,12 @@ CUDA_VISIBLE_DEVICES=0 python crst_seg.py \
     --src-port-step 0.0 \
     --mr-weight-kld $mr \
     --outsource camvid \
-    --early-stop true \
     --use-nid true \
+    --nid-bin $nid_bin \
     --outsource-weights ./results_segmentation/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb_/20200420-095339/espdnet_2.0_480_best.pth
     #--use-depth true \
     #--trainable-fusion true
   done
+  done
 done
+

@@ -141,9 +141,11 @@ class NIDLoss(nn.Module):
         p_cl = p_cl / p_cl.sum()
         p_c = p_c / p_c.sum()
         p_l = p_l / p_l.sum()
-        loss = self.nid(p_cl, p_c.reshape(p_c.size()[0], 1), p_l.reshape(p_l.size()[0], 1))
+        nid = self.nid(p_cl, p_c.reshape(p_c.size()[0], 1), p_l.reshape(p_l.size()[0], 1))
 
-        return loss
+        # Rescale the NID value of [0.95, 1.00] to [0.0, 1.0]
+        # Because the value range of NID between a camera image and a label image is roughly the range.
+        return (nid - 0.95)*20
 
 class SoftArgMax(nn.Module):
     def __init__(self):
@@ -173,3 +175,33 @@ class SoftArgMax(nn.Module):
 
     def forward(self, x):
         return self.soft_arg_max(x)
+
+class UncertaintyWeightedSegmentationLoss(nn.Module):
+    def __init__(self, class_weight=None):
+        super(UncertaintyWeightedSegmentationLoss, self).__init__()
+        self.class_weight = class_weight
+
+    def forward(self, pred, target, u_weight, epsilon=1e-12):
+        # Calculate softmax probability
+#        p_exp = torch.exp(pred)
+#        p_softmax = p_exp / (torch.sum(p_exp, dim=1) + epsilon)
+        batch_size = pred.size()[0]
+        H = pred.size()[2]
+        W = pred.size()[3]
+
+        logp = F.log_softmax(pred)
+        if self.class_weight is not None:
+            class_weight_tensor = self.class_weight.copy()
+            class_weight_tensor = class_weight_tensor.reshape(1, self.class_weight.size()[0], 1, 1).expand(batch_size, -1, H, W)
+            logp *= class_weight_tensor
+
+        # Gather log probabilities with respect to target
+        logp = logp.gather(1, target.view(batch_size, 1, H, W))
+
+        # Multiply with weights
+        weighted_logp = (logp * u_weight).view(batch_size, -1)
+
+        # Rescale so that loss is in approx. same interval
+        weighted_loss = weighted_logp.sum(1) / weights.view(batch_size, -1).sum(1)
+        
+        return weighted_loss.mean()
