@@ -182,6 +182,7 @@ class UncertaintyWeightedSegmentationLoss(nn.Module):
         self.class_weight = class_weight
 
     def forward(self, pred, target, u_weight, epsilon=1e-12):
+        torch.autograd.set_detect_anomaly(True)
         # Calculate softmax probability
 #        p_exp = torch.exp(pred)
 #        p_softmax = p_exp / (torch.sum(p_exp, dim=1) + epsilon)
@@ -189,19 +190,42 @@ class UncertaintyWeightedSegmentationLoss(nn.Module):
         H = pred.size()[2]
         W = pred.size()[3]
 
-        logp = F.log_softmax(pred)
+#        print(pred)
+
+        logp = -F.log_softmax(pred, dim=1)
+#        logp = torch.log(pred / pred.sum(dim=1, keepdim=True))
+#        print(pred.sum(dim=1, keepdim=True))
         if self.class_weight is not None:
-            class_weight_tensor = self.class_weight.copy()
-            class_weight_tensor = class_weight_tensor.reshape(1, self.class_weight.size()[0], 1, 1).expand(batch_size, -1, H, W)
-            logp *= class_weight_tensor
+            logp = logp * self.class_weight.reshape(1, self.class_weight.size()[0], 1, 1).expand(batch_size, -1, H, W)
 
         # Gather log probabilities with respect to target
         logp = logp.gather(1, target.view(batch_size, 1, H, W))
 
-        # Multiply with weights
-        weighted_logp = (logp * u_weight).view(batch_size, -1)
+        # Multiply with we-ights
+        logp = logp * torch.exp(-u_weight.reshape(batch_size, 1, H, W))
 
         # Rescale so that loss is in approx. same interval
-        weighted_loss = weighted_logp.sum(1) / weights.view(batch_size, -1).sum(1)
+#        weighted_loss = weighted_logp.sum(1) / weights.view(batch_size, -1).sum(1)
         
-        return weighted_loss.mean()
+        return logp.mean()
+
+class PixelwiseKLD(nn.Module):
+    def __init__(self):
+        super(PixelwiseKLD, self).__init__()
+
+    def forward(self, dist1, dist2):
+        # Calculate softmax probability
+#        p_exp = torch.exp(pred)
+#        p_softmax = p_exp / (torch.sum(p_exp, dim=1) + epsilon)
+#        batch_size = dist1.size()[0]
+#        H = dist1.size()[2]
+#        W = dist1.size()[3]
+
+        # Calculate probability and log probability
+        p1    = F.softmax(dist1, dim=1)
+        logp1 = F.log_softmax(dist1, dim=1)
+        logp2 = F.log_softmax(dist2, dim=1)
+
+        kld_i = p1 * logp1 - p1 * logp2
+
+        return torch.sum(kld_i, dim=1)

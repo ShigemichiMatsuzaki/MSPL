@@ -216,7 +216,7 @@ class GreenhouseRGBDSegmentation(data.Dataset):
                 rgb_img, label_img = self.val_transforms(rgb_img, label_img)
 
         # Get a file name
-        filename = self.images[index].rsplit('/', 1)[1]
+        filename = self.images[index]#.rsplit('/', 1)[1]
 
         if self.use_depth:
             return rgb_img, label_img, depth_img, filename, self.reg_weight
@@ -657,4 +657,120 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
 
             return rgb_img, label_img, img_name, self.reg_weight
 
+class GreenhouseRGBDConfidenceSegmentation(data.Dataset):
 
+    def __init__(self, root=None, list_name=None, train=True, scale=(0.5, 2.0), size=(480, 256),
+                 use_depth=True, reg_weights=0.0, use_traversable=True, conf_root=None):
+        self.train = train
+        self.use_depth = use_depth
+        self.reg_weight = reg_weights
+        self.use_traversable = use_traversable
+#        if self.train:
+        if root:
+            data_file = os.path.join(root, list_name)
+        else:
+            data_file = list_name
+        #else:
+        #    data_file = os.path.join(root, list_name)
+
+        self.images = []
+        self.masks = []
+        self.depths = []
+        self.conf = []
+        with open(data_file, 'r') as lines:
+            for line in lines:
+                line_split = line.split(',')
+#                rgb_img_loc = root + os.sep + line_split[0].rstrip()
+                rgb_img_loc = line_split[0].rstrip()
+#                rgb_img_loc = root + os.sep + line_split[1].rstrip()
+                label_img_loc = line_split[1].rstrip()
+#                print(rgb_img_loc)
+#                print(label_img_loc)
+                assert os.path.isfile(rgb_img_loc)
+                assert os.path.isfile(label_img_loc)
+                if self.use_depth:
+                    depth_img_loc = line_split[2].rstrip()
+                    assert os.path.isfile(depth_img_loc)
+
+                self.images.append(rgb_img_loc)
+                self.masks.append(label_img_loc)
+                if self.use_depth:
+                    self.depths.append(depth_img_loc)
+                
+                file_name = rgb_img_loc.rsplit('/', 1)[1]
+                assert os.path.isfile(os.path.join(conf_root, file_name))
+                self.conf.append(os.path.join(conf_root, file_name))
+
+        if isinstance(size, tuple):
+            self.size = size
+        else:
+            self.size = (size, size)
+
+        if isinstance(scale, tuple):
+            self.scale = scale
+        else:
+            self.scale = (scale, scale)
+
+        self.train_transforms, self.val_transforms = self.transforms()
+
+    def transforms(self):
+        train_transforms = Compose(
+            [
+#                RandomScale(scale=self.scale),
+#                RandomCrop(crop_size=self.size),
+                Resize(size=self.size),
+                RandomFlip(),
+                #Normalize()
+                Tensorize()
+            ]
+        )
+        val_transforms = Compose(
+            [
+                Resize(size=self.size),
+                #Normalize()
+                Tensorize()
+            ]
+        )
+        return train_transforms, val_transforms
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, index):
+        rgb_img = Image.open(self.images[index]).convert('RGB')
+        label_img = Image.open(self.masks[index])
+
+        '''
+        Open a depth image using OpenCV instead of PIL to deal with int16 format of the image
+        '''
+        if self.use_depth:
+            cv_depth = cv2.imread(self.depths[index], cv2.IMREAD_GRAYSCALE)
+            cv_depth.astype(np.uint8)
+            depth_img = Image.fromarray(cv_depth)
+
+        if not self.use_traversable:
+            label_np = np.array(label_img, np.uint8)
+            label_np[label_np==0] = 1
+            label_img = Image.fromarray(label_np)
+
+        # Load confidence values
+        conf_np = np.load(self.conf[index])
+
+        if self.train:
+            if self.use_depth:
+                rgb_img, label_img, depth_img = self.train_transforms(rgb_img, label_img, depth_img)
+            else:
+                rgb_img, label_img = self.train_transforms(rgb_img, label_img)
+        else:
+            if self.use_depth:
+                rgb_img, label_img, depth_img = self.val_transforms(rgb_img, label_img, depth_img)
+            else:
+                rgb_img, label_img = self.val_transforms(rgb_img, label_img)
+
+        # Get a file name
+        filename = self.images[index].rsplit('/', 1)[1]
+
+        if self.use_depth:
+            return rgb_img, label_img, depth_img, conf_np, filename, self.reg_weight
+        else:
+            return rgb_img, label_img, conf_np, filename, self.reg_weight

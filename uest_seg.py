@@ -35,7 +35,7 @@ from utilities.utils import AverageMeter
 from utilities.metrics.segmentation_miou import MIOU
 from utilities.train_eval_seg import train_seg as train
 from utilities.train_eval_seg import val_seg as val
-from loss_fns.segmentation_loss import NIDLoss
+from loss_fns.segmentation_loss import NIDLoss, UncertaintyWeightedSegmentationLoss, PixelwiseKLD
 
 ###
 # Matsuzaki
@@ -44,7 +44,6 @@ from loss_fns.segmentation_loss import NIDLoss
 # For visualization using TensorBoardX
 from tensorboardX import SummaryWriter
 #from metric.iou import IoU
-#from enet.greenhouse import Greenhouse, GreenhouseTestDataSet, GreenhouseStMineDataSet, GreenhouseWithTravDataSet
 from tqdm import tqdm
 from data_loader.segmentation.greenhouse import id_camvid_to_greenhouse
 
@@ -288,14 +287,6 @@ def get_arguments():
 
 args = get_arguments()
 
-# Initialize a writer for TensorboardX
-# pretrained_model_name = args.restore_from.rsplit('/', 2)[1]
-# train_mode = 'CBST' if args.mr_weight_kld == 0.0 else 'MR' + str(args.mr_weight_kld)
-# train_mode += 'tgtport' + str(args.init_tgt_port)
-# logdir = util.tensorboard_dir(args.runs_root, args.model + train_mode, args.data_src, args.learning_rate, pretrained_model_name)
-# save_path = util.tensorboard_dir(args.save, args.dataset+train_mode, args.data_src, args.learning_rate, pretrained_model_name)
-# save_path = util.get_result_dir(args.save, args.dataset+train_mode)
-
 # palette
 if args.data_src == 'greenhouse':
     palette = [0, 255, 0,
@@ -335,7 +326,7 @@ def main():
     outsource_str = "_os_" + args.outsource if args.outsource else ""
     loss_str = "_nid_{}".format(args.nid_bin) if args.use_nid else ""
 
-    args.savedir = '{}/model_{}_{}/s_{}_res_{}_crst{}{}_tgtinit_{}_tgtstep_{}_mr_{}{}/{}'.format(
+    args.savedir = '{}/model_{}_{}/s_{}_res_{}_uest{}{}_tgtinit_{}_tgtstep_{}_mr_{}{}/{}'.format(
         args.save, args.model, args.dataset,
         args.s, args.crop_size[0], use_depth_str, trainable_fusion_str,
         args.init_tgt_port, args.tgt_port_step, args.mr_weight_kld, loss_str,
@@ -366,14 +357,6 @@ def main():
     if args.dataset == 'greenhouse':
         from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
 
-#        train_dataset = GreenhouseRGBDSegmentation(
-#            list_name=args.data_src_list, train=True,
-#            size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
-#
-#        val_dataset = GreenhouseRGBDSegmentation(
-#                list_name=args.data_tgt_test_list, train=False,
-#                size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
-
         class_weights = np.load('class_weights.npy')[:4]
         class_weights = torch.from_numpy(class_weights).float().to(device)
 
@@ -393,15 +376,7 @@ def main():
         id_2_label = label_2_id
 
     # Import pretrained model
-    if args.model == 'ENet':
-        model = ENet(num_classes=args.num_classes_seg)
-        loc = "cuda:" + str(args.gpu)
-        saved_state_dict = torch.load(args.restore_from,map_location=loc)
-        new_params = saved_state_dict.copy()
-        model.load_state_dict(new_params)
-    elif args.model == 'espnet':
-        pass
-    elif args.model == 'espdnet':
+    if args.model == 'espdnet':
         from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
         args.classes = seg_classes
 
@@ -429,6 +404,35 @@ def main():
             class_weights = torch.from_numpy(class_weights).float().to(device)
         elif args.outsource is None:
             model = espdnet_seg_with_pre_rgbd(args)
+    elif args.model == 'espdnetue':
+        from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
+        from model.segmentation.espdnet_ue import espdnetue_seg
+        args.classes = seg_classes
+
+        # Import pretrained model trained for giving initial pseudo-labels
+        if args.outsource == 'camvid':
+            model = espdnetue_seg(args)
+
+            tmp_args = copy.deepcopy(args)
+            tmp_args.trainable_fusion = False
+            tmp_args.dense_fuse = False
+            tmp_args.use_depth  = False
+            tmp_args.classes = 13
+            tmp_args.dataset = 'camvid'
+            tmp_args.weights = args.outsource_weights
+            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+
+            from data_loader.segmentation.camvid import CamVidSegmentation
+            ds = CamVidSegmentation(
+                root='', list_name=args.data_src_list, train=True, label_conversion=True)
+            tmp_loader = torch.utils.data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
+            
+            print("Calculate class weights!")
+            class_weights = calc_cls_class_weight(tmp_loader, args.num_classes_seg)
+            print(class_weights)
+            class_weights = torch.from_numpy(class_weights).float().to(device)
+        elif args.outsource is None:
+            model = espdnet_seg(args)
 
     print("Model {} is load successfully!".format(args.restore_from))
 
@@ -466,54 +470,43 @@ def main():
 
     # 
     # Main loop
-    #
+    #s
     writer_idx = 0
     #class_weights = None
     writer = SummaryWriter(save_path)
     old_miou = -0.0
+
+    #
+    # Pseudo-label generation
+    #
+    ### Preparation
+    save_pseudo_label_color_path = osp.join(save_path, 'pseudo_label_color')  # in every 'save_round_eval_path'
+    if not os.path.exists(save_pseudo_label_color_path):
+        os.makedirs(save_pseudo_label_color_path)
+    ## output folder
+    save_pred_vis_path = osp.join(save_path, 'pred_vis')
+    save_prob_path = osp.join(save_path, 'prob')
+    save_pred_path = osp.join(save_path, 'pred')
+    save_conf_path = osp.join(save_path, 'conf')
+    if not os.path.exists(save_pred_vis_path):
+        os.makedirs(save_pred_vis_path)
+    if not os.path.exists(save_prob_path):
+        os.makedirs(save_prob_path)
+    if not os.path.exists(save_pred_path):
+        os.makedirs(save_pred_path)
+    if not os.path.exists(save_conf_path):
+        os.makedirs(save_conf_path)
+
+    tgt_train_lst = val(model_outsource, device, save_path, 
+                        0, tgt_num, label_2_id, valid_labels,
+                        args, logger, class_encoding, writer, args.outsource)
+
     for round_idx in range(args.num_rounds):
-        ### Preparation
-#        save_round_eval_path = osp.join(args.save,str(round_idx))
-        save_round_eval_path = osp.join(save_path, str(round_idx))
-        save_pseudo_label_color_path = osp.join(save_round_eval_path, 'pseudo_label_color')  # in every 'save_round_eval_path'
-        if not os.path.exists(save_round_eval_path):
-            os.makedirs(save_round_eval_path)
-        if not os.path.exists(save_pseudo_label_color_path):
-            os.makedirs(save_pseudo_label_color_path)
 
         ########## pseudo-label generation
         if round_idx != args.num_rounds - 1: # If it's not the last round
-            # evaluation & save confidence vectors
-            if round_idx == 0 and args.outsource:
-                conf_dict, pred_cls_num, save_prob_path, save_pred_path = val(model_outsource, device, save_round_eval_path,
-                                                                              round_idx, tgt_num, label_2_id, valid_labels,
-                                                                              args, logger, class_encoding, writer, args.outsource)
-            else:
-                conf_dict, pred_cls_num, save_prob_path, save_pred_path = val(model, device, save_round_eval_path,
-                                                                              round_idx, tgt_num, label_2_id, valid_labels,
-                                                                              args, logger, class_encoding, writer)
-            # class-balanced thresholds
-            cls_thresh = kc_parameters(conf_dict, pred_cls_num, tgt_portion, round_idx, save_stats_path, args, logger)
-            tgt_portion = min(tgt_portion + args.tgt_port_step, args.max_tgt_port)
-
-            # pseudo-label maps generation
-            label_selection(
-                cls_thresh, tgt_num, image_name_tgt_list, id_2_label, round_idx, save_prob_path,
-                save_pred_path, save_pseudo_label_path, save_pseudo_label_color_path, save_round_eval_path, args, logger)
-
-            # save training list
-            if args.src_sampling_policy == 'c':
-                randseed = args.randseed
-            elif args.src_sampling_policy == 'r':
-                randseed += 1
-
             # Create the list of training data
-            src_train_lst, tgt_train_lst, src_num_sel = savelst_SrcTgt(
-                src_portion, image_tgt_list, depth_tgt_list, image_name_tgt_list, 
-                image_src_list, label_src_list, depth_src_list,
-                save_lst_path, save_pseudo_label_path, src_num, tgt_num, randseed, args)
-
-            src_portion = min(src_portion + args.src_port_step, args.max_src_port)
+#            src_train_lst, tgt_train_lst = 
 
             ########### model retraining
             # dataset
@@ -529,19 +522,12 @@ def main():
             # Initial test
             tgt_set = 'test'
             if round_idx:
-                test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
-                               valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
+                test(model, device, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+                     valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
             else:
                 # Get the initial IoU in the first round for early stop
-                old_miou = test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
-                               valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
-
-            ### patch mining params
-            # no patch mining in src
-            # patch mining in target
-            rare_id = np.load(save_stats_path + '/rare_id_round' + str(round_idx) + '.npy')
-            mine_id = np.load(save_stats_path + '/mine_id_round' + str(round_idx) + '.npy')
-            mine_chance = args.mine_chance
+                old_miou = test(model, device, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+                                valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
 
             # dataloader
             #  New dataset (labels) is created every round
@@ -552,38 +538,23 @@ def main():
                     from data_loader.segmentation.greenhouse import GREENHOUSE_CLASS_LIST
                     from data_loader.segmentation.camvid import CamVidSegmentation
 
-                    print(src_train_lst)
-                    # Import source dataset (with manual labels)
-#                    srctrainset = GreenhouseRGBDSegmentation(
-#                        list_name=src_train_lst, train=True, 
-#                        size=args.crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.use_traversable)
-                    srctrainset = CamVidSegmentation(
-                        root='', list_name=src_train_lst, size=args.crop_size, scale=args.scale, train=True, label_conversion=True)
-
                     # Initialize the class weights 
                     if class_weights is None:
                         class_weights = np.ones(args.num_classes_seg)
                         class_weights = torch.from_numpy(class_weights).float().to(device)
 
-                    # Import target dataset (with pseudo-labels)
-                    tgttrainset = GreenhouseRGBDStMineDataSet(
-                        tgt_train_lst,pseudo_root=save_pseudo_label_path, max_iters=tgt_num, reg_weight=reg_weight_tgt, 
-                        rare_id = rare_id, mine_id=mine_id, mine_chance = mine_chance, size=input_size,
-                        mirror=args.random_mirror, scale=train_scale_tgt, mean=IMG_MEAN, std=IMG_STD,
-                        use_depth=args.use_depth, use_traversable=args.use_traversable)
-#                     tgttrainset = GreenhouseWithTravDataSet(
-#                         args.data_tgt_dir, tgt_train_lst, trav_root=args.trav_root, 
-#                         transform=image_transform, label_transform=label_transform,
-#                         pseudo_root=save_pseudo_label_path, max_iters=tgt_num, reg_weight=reg_weight_tgt, rare_id = rare_id,
-#                         mine_id=mine_id, mine_chance = mine_chance, crop_size=input_size,scale=False, #args.random_scale,
-#                         mirror=args.random_mirror, train_scale=train_scale_tgt, mean=IMG_MEAN, std=IMG_STD)
+                    tgttrainset = GreenhouseRGBDSegmentation(
+                        list_name=tgt_train_lst, train=True, 
+                        size=args.crop_size, scale=args.scale, use_depth=args.use_depth)
+
                 else:
                     pass
             elif args.lr_weight_ent > 0.0:
                 pass
 
             # Create a dataset concatinating the source dataset and the target dataset
-            mixtrainset = torch.utils.data.ConcatDataset([srctrainset, tgttrainset])
+#            mixtrainset = torch.utils.data.ConcatDataset([srctrainset, tgttrainset])
+            mixtrainset = tgttrainset
             mix_trainloader = torch.utils.data.DataLoader(
                 mixtrainset, batch_size=args.batch_size, shuffle=True,
                 num_workers=0, pin_memory=args.pin_memory)
@@ -596,7 +567,7 @@ def main():
                 train_params = [{'params': model.get_basenet_params(), 'lr': args.learning_rate},
                                 {'params': model.get_segment_params(), 'lr': args.learning_rate * 10}]
 
-            tot_iter = np.ceil(float(src_num_sel + tgt_num) / args.batch_size)
+            tot_iter = np.ceil(float(tgt_num) / args.batch_size)
             if args.optimizer == 'SGD':
                 optimizer = optim.SGD(
                     model.parameters(),
@@ -639,8 +610,8 @@ def main():
 
             # test self-trained model in target domain test set
             tgt_set = 'test'
-            new_miou = test(model, device, save_round_eval_path, round_idx+1, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
-                            valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
+            new_miou = test(model, device, round_idx+1, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+                            valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
 
             if args.early_stop and old_miou - new_miou > 10.0:
                 logger.info(
@@ -651,14 +622,15 @@ def main():
         elif round_idx == args.num_rounds - 1:
             shutil.rmtree(save_pseudo_label_path)
             tgt_set = 'train'
-            test(model, device, save_round_eval_path, round_idx+1, tgt_set, tgt_num, args.data_tgt_train_list, label_2_id,
-                 valid_labels, args, logger, class_encoding, metric, loss_calc,writer, class_weights, reg_weight_tgt)
+            test(model, device, round_idx+1, tgt_set, tgt_num, args.data_tgt_train_list, label_2_id,
+                 valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
             tgt_set = 'test'
-            test(model, device, save_round_eval_path, round_idx+2, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
-                 valid_labels, args, logger, class_encoding, metric, loss_calc, writer, class_weights, reg_weight_tgt)
+            test(model, device, round_idx+2, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+                 valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
 
 """Create the model and start the evaluation process."""
-def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer, outsource=None):
+def val(model, device, save_path, round_idx, 
+        tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer, outsource=None):
     ## scorer
     scorer = ScoreUpdater(valid_labels, args.num_classes_seg, tgt_num, logger)
     scorer.reset()
@@ -693,16 +665,11 @@ def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, val
     ## output of deeplab is logits, not probability
     softmax2d = nn.Softmax2d()
 
-    ## output folder
-    save_pred_vis_path = osp.join(save_round_eval_path, 'pred_vis')
-    save_prob_path = osp.join(save_round_eval_path, 'prob')
-    save_pred_path = osp.join(save_round_eval_path, 'pred')
-    if not os.path.exists(save_pred_vis_path):
-        os.makedirs(save_pred_vis_path)
-    if not os.path.exists(save_prob_path):
-        os.makedirs(save_prob_path)
-    if not os.path.exists(save_pred_path):
-        os.makedirs(save_pred_path)
+    save_pred_vis_path = osp.join(save_path, 'pred_vis')
+    save_prob_path = osp.join(save_path, 'prob')
+    save_pred_path = osp.join(save_path, 'pred')
+    save_conf_path = osp.join(save_path, 'conf')
+    tgt_train_lst = osp.join(save_path, 'tgt_train.lst')
 
     # saving output data
     conf_dict = {k: [] for k in range(args.num_classes_seg)}
@@ -711,6 +678,9 @@ def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, val
     ## evaluation process
     logger.info('###### Start evaluating target domain train set in round {}! ######'.format(round_idx))
     start_eval = time.time()
+    image_path_list = []
+    label_path_list = []
+    depth_path_list = []
     with torch.no_grad():
         ious = 0
         with tqdm(total=len(testloader)) as pbar:
@@ -758,60 +728,31 @@ def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, val
                     amax_output_col = colorize_mask(amax_output)
 
     #            label = label_2_id[np.asarray(label.numpy(), dtype=np.uint8)]
+                path_name = name[0]
                 name = name[0].split('/')[-1]
                 image_name = name.rsplit('.', 1)[0]
                 # prob
                 np.save('%s/%s.npy' % (save_prob_path, image_name), output)
+                np.save('%s/%s.npy' % (save_conf_path, image_name), conf)
                 # trainIDs/vis seg maps
                 amax_output = Image.fromarray(amax_output)
                 # Save the predicted images (+ colorred images for visualization)
                 amax_output.save('%s/%s.png' % (save_pred_path, image_name))
                 amax_output_col.save('%s/%s_color.png' % (save_pred_vis_path, image_name))
-    
-                # save class-wise confidence maps
-                #
-                old_miou = -0.0
-                # 'conf' : Save the probabilities of pixel where the class idx_cls is the max
-                #
-                if args.kc_value == 'conf':
-                    for idx_cls in range(args.num_classes_seg):
-                        # Count the number of predicted class idx_cls in pred_label
-                        idx_temp = pred_label == idx_cls # Returns the result of comparison of each element as an array
-                        pred_cls_num[idx_cls] = pred_cls_num[idx_cls] + np.sum(idx_temp) # np.sum(idx_temp) counts up all the Trues
-    
-                        # If there's at least one True in idx_temp i.e., predicted class idx_cls in pred_label
-                        if idx_temp.any():
-                            # The number of pixels classified as idx_cls in current batch 
-                            #   conf[idx_tmp] : Returns confidence values at the location where idx_tmp is True as an array
-                            #                     -> Get all the confidence values of idx_cls
-                            conf_cls_temp = conf[idx_temp].astype(np.float32)
-                            len_cls_temp = conf_cls_temp.size
-    
-                            # downsampling by ds_rate
-                            if args.ds_rate != 0:
-                                conf_cls = conf_cls_temp[0:len_cls_temp:args.ds_rate]
-                            else:
-                                conf_cls = conf_cls_temp[0:len_cls_temp]
 
-                            conf_dict[idx_cls].extend(conf_cls)
-                #
-                # 'prob' : Save all the output probabilities of class idx_cls
-                #
-                elif args.kc_value == 'prob':
-                    for idx_cls in range(args.num_classes_seg):
-                        # Same as the process above
-                        idx_temp = pred_label == idx_cls
-                        pred_cls_num[idx_cls] = pred_cls_num[idx_cls] + np.sum(idx_temp)
-    
-                        # prob slice
-                        # All the probability values of idx_cls
-                        prob_cls_temp = output[:,:,idx_cls].astype(np.float32).ravel()
-                        len_cls_temp = prob_cls_temp.size
-    
-                        # downsampling by ds_rate
-                        prob_cls = prob_cls_temp[0:len_cls_temp:args.ds_rate]
-                        conf_dict[idx_cls].extend(prob_cls) # it should be prob_dict; but for unification, use conf_dict
+                image_path_list.append(path_name)
+                label_path_list.append('%s/%s.png' % (save_pred_path, image_name)) 
+                if args.use_depth:
+                    depth_path_list.append(path_name.replace('color', 'depth'))
+        
         pbar.close()
+
+    with open(tgt_train_lst, 'w') as f:
+        for idx in range(len(image_path_list)):
+            if args.use_depth:
+                f.write("%s,%s,%s\n" % (image_path_list[idx], label_path_list[idx], depth_path_list[idx]))
+            else:
+                f.write("%s,%s\n" % (image_path_list[idx], label_path_list[idx]))
 
     batch = iter(testloader).next()
     image = batch[0].to(device)
@@ -829,9 +770,9 @@ def val(model, device, save_round_eval_path, round_idx, tgt_num, label_2_id, val
 
     logger.info('###### Finish evaluating target domain train set in round {}! Time cost: {:.2f} seconds. ######'.format(round_idx, time.time()-start_eval))
 
-    return conf_dict, pred_cls_num, save_prob_path, save_pred_path  # return the dictionary containing all the class-wise confidence vectors
+    return tgt_train_lst  # return the dictionary containing all the class-wise confidence vectors
 
-def train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx, epoch_idx,
+def train(trainloader, model, device, interp, optimizer, tot_iter, round_idx, epoch_idx,
           args, logger, metric, class_encoding, writer_idx, class_weights=None, writer=None, add_loss=None):
     """Create the model and start the training."""
     epoch_loss = 0
@@ -844,39 +785,48 @@ def train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx
     union_meter = AverageMeter()
 
     miou_class = MIOU(num_classes=4)
-
-    with tqdm(total=len(mix_trainloader)) as pbar:
-        for i_iter, batch in enumerate(tqdm(mix_trainloader)):
+    criterion = UncertaintyWeightedSegmentationLoss(class_weights)
+    kld_layer = PixelwiseKLD()
+    with tqdm(total=len(trainloader)) as pbar:
+        for i_iter, batch in enumerate(tqdm(trainloader)):
             images = batch[0].to(device)
             labels = batch[1].to(device)
             if args.use_depth:
                 depths = batch[2].to(device)
-                reg_weights = batch[4]
-            else:
-                reg_weights = batch[3]
     
             optimizer.zero_grad()
             adjust_learning_rate(optimizer, i_iter, tot_iter)
     
             # Upsample the output of the model to the input size
             # TODO: Change the input according to the model type
+            interp = None
             if interp is not None:
                 if args.use_depth:
-                    pred = interp(model(images, depths))
+                    if args.model == 'espdnet':
+                        pred = interp(model(images, depths))
+                    elif args.model == 'espdnetue':
+                        (pred, pred_aux) = interp(model(images, depths))
                 else:
-                    pred = interp(model(images))
+                    if args.model == 'espdnet':
+                        pred = interp(model(images))
+                    elif args.model == 'espdnetue':
+                        (pred, pred_aux) = interp(model(images))
             else:
                 if args.use_depth:
-                    pred = model(images, depths)
+                    if args.model == 'espdnet':
+                        pred = model(images, depths)
+                    elif args.model == 'espdnetue':
+                        (pred, pred_aux) = model(images, depths)
                 else:
-                    pred = model(images)
+                    if args.model == 'espdnet':
+                        pred = model(images)
+                    elif args.model == 'espdnetue':
+                        (pred, pred_aux) = model(images)
     
     #        print(pred.size())
             # Model regularizer
-            if args.lr_weight_ent == 0.0:
-                loss = reg_loss_calc(pred, labels, reg_weights.to(device), args, class_weights)
-            if args.lr_weight_ent > 0.0:
-                loss = reg_loss_calc_expand(pred, labels, reg_weights.to(device), args)
+            kld = kld_layer(pred, pred_aux)
+            loss = criterion(pred, labels, kld) + kld
 
             if add_loss is not None:
                 loss2 = add_loss(images, pred.to(device))
@@ -934,8 +884,8 @@ def train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx
     return writer_idx
 
 
-def test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, test_list,
-         label_2_id, valid_labels, args, logger, class_encoding, metric, criterion, writer, class_weights, reg_weight=0.0):
+def test(model, device, round_idx, tgt_set, test_num, test_list,
+         label_2_id, valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight=0.0):
     """Create the model and start the evaluation process."""
     ## scorer
     scorer = ScoreUpdater(valid_labels, args.num_classes_seg, test_num, logger)
@@ -954,6 +904,8 @@ def test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, test
 
     miou_class = MIOU(num_classes=4)
 
+    criterion = UncertaintyWeightedSegmentationLoss(class_weights)
+    kld_layer = PixelwiseKLD()
     # TODO: Remove the composes
     if args.dataset == 'greenhouse':
         # TODO: Change dataset
@@ -983,14 +935,6 @@ def test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, test
     ## output of deeplab is logits, not probability
     softmax2d = nn.Softmax2d()
 
-    ## output folder
-    if tgt_set == 'train':
-        save_test_vis_path = osp.join(save_round_eval_path, 'trainSet_vis')
-    elif tgt_set == 'test':
-        save_test_vis_path = osp.join(save_round_eval_path, 'testSet_vis')
-    if not os.path.exists(save_test_vis_path):
-        os.makedirs(save_test_vis_path)
-
     ## evaluation process
     logger.info('###### Start evaluating in target domain {} set in round {}! ######'.format(tgt_set, round_idx))
     start_eval = time.time()
@@ -1013,21 +957,31 @@ def test(model, device, save_round_eval_path, round_idx, tgt_set, test_num, test
 
             # Upsample the output of the model to the input size
             # TODO: Change the input according to the model type
+            interp = None
             if interp is not None:
                 if args.use_depth:
-                    pred = interp(model(images, depths))
+                    if args.model == 'espdnet':
+                        pred = interp(model(images, depths))
+                    elif args.model == 'espdnetue':
+                        (pred, pred_aux) = interp(model(images, depths))
                 else:
-                    pred = interp(model(images))
+                    if args.model == 'espdnet':
+                        pred = interp(model(images))
+                    elif args.model == 'espdnetue':
+                        (pred, pred_aux) = interp(model(images))
             else:
                 if args.use_depth:
-                    pred = model(images, depths)
+                    if args.model == 'espdnet':
+                        pred = model(images, depths)
+                    elif args.model == 'espdnetue':
+                        (pred, pred_aux) = model(images, depths)
                 else:
-                    pred = model(images)
+                    if args.model == 'espdnet':
+                        pred = model(images)
+                    elif args.model == 'espdnetue':
+                        (pred, pred_aux) = model(images)
 
-            if args.lr_weight_ent == 0.0:
-                loss = reg_loss_calc(pred, labels, reg_weights.to(device), args, class_weights)
-            if args.lr_weight_ent > 0.0:
-                loss = reg_loss_calc_expand(pred, labels, reg_weights.to(device), args)
+            loss = criterion(pred, labels, torch.max(-F.softmax(pred, 1)+1, 1)[0]) # torch.max returns a tuple of (maxvalues, indices)
 
             inter, union = miou_class.get_iou(pred, labels)
     
@@ -1395,103 +1349,6 @@ class ScoreUpdater(object):
                 logger.info('\n{}'.format(ious * 100))
 
         return ious
-
-
-def loss_calc(pred, label):
-    """
-    This function returns cross entropy loss for semantic segmentation
-    """
-    # out shape batch_size x channels x h x w -> batch_size x channels x h x w
-    # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=IGNORE_LABEL).cuda()
-
-    return criterion(pred, label)
-
-def reg_loss_calc(pred, label, reg_weights, args, weights=None):
-    """
-    This function returns cross entropy loss for semantic segmentation
-    """
-    # out shape batch_size x channels x h x w -> batch_size x channels x h x w
-    # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
-    mr_weight_kld = args.mr_weight_kld
-    num_class = float(args.num_classes_seg)
-    valid_num = torch.sum(label != IGNORE_LABEL).float()
-
-    label_reg = label[reg_weights != 0,:,:]
-    valid_reg_num = torch.sum(label_reg != IGNORE_LABEL).float()
-
-    softmax = F.softmax(pred, dim=1)   # compute the softmax values
-
-    if weights is not None:
-        logsoftmax = F.log_softmax(pred,dim=1)*weights.unsqueeze(dim=-1).unsqueeze(dim=-1).unsqueeze(dim=0)   # compute the log of softmax values
-    else:
-        logsoftmax = F.log_softmax(pred,dim=1)   # compute the log of softmax values
-
-    label_expand = torch.unsqueeze(label, 1).repeat(1,int(num_class),1,1)
-    labels = label_expand.clone()
-    labels[labels != IGNORE_LABEL] = 1.0
-    labels[labels == IGNORE_LABEL] = 0.0
-    labels_valid = labels.clone()
-    # labels = torch.unsqueeze(labels, 1).repeat(1,num_class,1,1)
-    labels = torch.cumsum(labels, dim=1)
-    labels[labels != label_expand + 1] = 0.0
-    del label_expand
-    labels[labels != 0 ] = 1.0
-    ### check the vectorized labels
-    # check_labels = torch.argmax(labels, dim=1)
-    # label[label == 255] = 0
-    # print(torch.sum(check_labels.float() - label))
-    reg_weights = reg_weights.float().view(len(reg_weights),1,1,1)
-    ce = torch.sum( -logsoftmax*labels.type(torch.cuda.FloatTensor) ) # cross-entropy loss with vector-form softmax
-    softmax_val = softmax*labels_valid.type(torch.cuda.FloatTensor)
-    logsoftmax_val = logsoftmax*labels_valid.type(torch.cuda.FloatTensor)
-    kld = torch.sum( -logsoftmax_val/num_class*reg_weights )
-
-    if valid_reg_num > 0:
-        reg_ce = ce/valid_num + (mr_weight_kld*kld)/valid_reg_num
-    else:
-        reg_ce = ce/valid_num
-
-    return reg_ce
-
-def reg_loss_calc_expand(pred, label, reg_weights, args):
-    """
-    This function returns cross entropy loss for semantic segmentation
-    """
-    # out shape batch_size x channels x h x w -> batch_size x channels x h x w
-    # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
-    mr_weight_kld = args.mr_weight_kld
-    num_class = float(args.num_classes_seg)
-
-    # soft labels regard ignored labels as zero soft labels in data loader
-    # C = label.cpu().numpy()
-    label_sum = torch.sum(label,1)
-    # D = label_sum.cpu().numpy()
-    valid_num = torch.sum(label_sum != 0.0).float()
-
-    label_reg = label_sum[reg_weights != 0,:,:]
-    valid_reg_num = torch.sum(label_reg != 0.0).float()
-
-    softmax = F.softmax(pred, dim=1)   # compute the softmax values
-    logsoftmax = F.log_softmax(pred,dim=1)   # compute the log of softmax values
-
-    label_expand = torch.unsqueeze(label_sum, 1).repeat(1,num_class,1,1)
-    label_valid = label_expand.clone()
-    label_valid[label_valid != 0] = 1.0
-    label_valid = label_valid.clone()
-    # # check the vectorized labels
-    reg_weights = reg_weights.float().view(len(reg_weights),1,1,1)
-    ce = torch.sum( -logsoftmax*label ) # cross-entropy loss with vector-form softmax
-    softmax_val = softmax*label_valid
-    logsoftmax_val = logsoftmax*label_valid
-    kld = torch.sum( -logsoftmax_val/num_class*reg_weights )
-
-    if valid_reg_num > 0:
-        reg_ce = ce/valid_num + (mr_weight_kld*kld)/valid_reg_num
-    else:
-        reg_ce = ce/valid_num
-
-    return reg_ce
 
 # Adjust learning rate based on the number iteration
 def lr_poly(base_lr, iter_n, max_iter, power):

@@ -83,7 +83,11 @@ def in_training_visualization_img(model, images, depths=None, labels=None, class
     
     # Predictions is one-hot encoded with "num_classes" channels.
     # Convert it to a single int using the indices where the maximum (1) occurs
-    _, predictions = torch.max(predictions.data, 1)
+    if type(predictions) is tuple:
+        f_pred = predictions[0] + 0.5 * predictions[1]
+        _, predictions = torch.max(f_pred, dim=1)
+    else:
+        _, predictions = torch.max(predictions.data, dim=1)
     
        # label_to_rgb : Sequence of processes
     #  1. LongTensorToRGBPIL(tensor) -> PIL Image : Convert label tensor to color map
