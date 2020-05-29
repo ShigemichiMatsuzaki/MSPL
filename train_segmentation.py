@@ -12,8 +12,6 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, calc_cls_class_weight
-from utilities.train_eval_seg import train_seg as train
-from utilities.train_eval_seg import val_seg as val
 # from torch.utils.tensorboard import SummaryWriter
 from tensorboardX import SummaryWriter
 from loss_fns.segmentation_loss import SegmentationLoss, NIDLoss
@@ -179,6 +177,13 @@ def main(args):
         print("Trainable fusion : {}".format(args.trainable_fusion))
         print("Segmentation classes : {}".format(seg_classes))
         model = espdnet_seg(args)
+    elif args.model == 'espdnetue':
+        from model.segmentation.espdnet_ue import espdnetue_seg
+        args.classes = seg_classes
+        print("Trainable fusion : {}".format(args.trainable_fusion))
+        print("Segmentation classes : {}".format(seg_classes))
+        model = espdnetue_seg(args)
+
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
         model = dicenet_seg(args, classes=seg_classes)
@@ -325,6 +330,14 @@ def main(args):
 
         print_info_message(
             'Running epoch {} with learning rates: base_net {:.6f}, segment_net {:.6f}'.format(epoch, lr_base, lr_seg))
+
+        if args.model == 'espdnetue':
+            from utilities.train_eval_seg import train_seg_ue as train
+            from utilities.train_eval_seg import val_seg_ue as val
+        else:
+            from utilities.train_eval_seg import train_seg as train
+            from utilities.train_eval_seg import val_seg as val
+
         miou_train, train_loss = train(
             model, train_loader, optimizer, criterion, seg_classes, epoch, device=device, use_depth=args.use_depth, add_criterion=nid_loss)
         miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device, use_depth=args.use_depth, add_criterion=nid_loss)
@@ -495,7 +508,7 @@ if __name__ == "__main__":
     if not args.finetune:
         from model.weight_locations.classification import model_weight_map
 
-        if args.model == 'espdnet':
+        if args.model == 'espdnet' or args.model == 'espdnetue':
             weight_file_key = '{}_{}'.format('espnetv2', args.s)
             assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)
             args.weights = model_weight_map[weight_file_key]

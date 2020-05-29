@@ -7,6 +7,7 @@ import torchvision
 import torchvision.transforms as transforms
 from collections import OrderedDict
 import logging
+from loss_fns.segmentation_loss import PixelwiseKLD
 
 #============================================
 __author__ = "Sachin Mehta"
@@ -84,7 +85,13 @@ def in_training_visualization_img(model, images, depths=None, labels=None, class
     # Predictions is one-hot encoded with "num_classes" channels.
     # Convert it to a single int using the indices where the maximum (1) occurs
     if type(predictions) is tuple:
+        kld_layer = PixelwiseKLD()
         f_pred = predictions[0] + 0.5 * predictions[1]
+        kld = kld_layer(predictions[0], predictions[1])
+        kld = (-kld / torch.max(kld).item() + 1)# * 255# Scale to [0, 255]
+        kld = torch.reshape(kld, (kld.size(0), 1, kld.size(1), kld.size(2)))
+        kld = torchvision.utils.make_grid(kld.cpu()).numpy()
+        writer.add_image(data + '/kld', kld, epoch)
         _, predictions = torch.max(f_pred, dim=1)
     else:
         _, predictions = torch.max(predictions.data, dim=1)

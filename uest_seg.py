@@ -35,7 +35,7 @@ from utilities.utils import AverageMeter
 from utilities.metrics.segmentation_miou import MIOU
 from utilities.train_eval_seg import train_seg as train
 from utilities.train_eval_seg import val_seg as val
-from loss_fns.segmentation_loss import NIDLoss, UncertaintyWeightedSegmentationLoss, PixelwiseKLD
+from loss_fns.segmentation_loss import NIDLoss, UncertaintyWeightedSegmentationLoss, PixelwiseKLD, SegmentationLoss
 
 ###
 # Matsuzaki
@@ -282,6 +282,7 @@ def get_arguments():
                         help="Whether to stop the training if the mean IoU is substancially degraded")
     parser.add_argument('--use-nid', default=False, type=bool, help='Use NID loss')
     parser.add_argument('--nid-bin', default=32, type=int, help='Bin size of an image intensity histogram in calculating  NID loss')
+    parser.add_argument('--use-uncertainty', default=False, type=bool, help='Use uncertainty weighting')
 
     return parser.parse_args()
 
@@ -324,12 +325,13 @@ def main():
         trainable_fusion_str = ""
 
     outsource_str = "_os_" + args.outsource if args.outsource else ""
+    ue_str   = "_ue" if args.use_uncertainty else ""
     loss_str = "_nid_{}".format(args.nid_bin) if args.use_nid else ""
 
-    args.savedir = '{}/model_{}_{}/s_{}_res_{}_uest{}{}_tgtinit_{}_tgtstep_{}_mr_{}{}/{}'.format(
-        args.save, args.model, args.dataset,
-        args.s, args.crop_size[0], use_depth_str, trainable_fusion_str,
-        args.init_tgt_port, args.tgt_port_step, args.mr_weight_kld, loss_str,
+    args.savedir = '{}/model_{}_{}/s_{}_res_{}_uest{}{}{}{}{}/{}'.format(
+        args.save, 
+        args.model, args.dataset, 
+        args.s, args.crop_size[0], use_depth_str, trainable_fusion_str, outsource_str, ue_str, loss_str,
         timestr)
 
     if not os.path.isdir(args.savedir):
@@ -411,7 +413,7 @@ def main():
 
         # Import pretrained model trained for giving initial pseudo-labels
         if args.outsource == 'camvid':
-            model = espdnetue_seg(args)
+            model = espdnetue_seg(args, load_entire_weights=True)
 
             tmp_args = copy.deepcopy(args)
             tmp_args.trainable_fusion = False
@@ -785,7 +787,13 @@ def train(trainloader, model, device, interp, optimizer, tot_iter, round_idx, ep
     union_meter = AverageMeter()
 
     miou_class = MIOU(num_classes=4)
-    criterion = UncertaintyWeightedSegmentationLoss(class_weights)
+    if args.use_uncertainty:
+        criterion = UncertaintyWeightedSegmentationLoss(class_weights)
+    else:
+        criterion = SegmentationLoss(n_classes=4,
+                                     device=device, ignore_idx=args.ignore_label,
+                                     class_wts=class_weights.to(device))
+
     kld_layer = PixelwiseKLD()
     with tqdm(total=len(trainloader)) as pbar:
         for i_iter, batch in enumerate(tqdm(trainloader)):
@@ -826,7 +834,10 @@ def train(trainloader, model, device, interp, optimizer, tot_iter, round_idx, ep
     #        print(pred.size())
             # Model regularizer
             kld = kld_layer(pred, pred_aux)
-            loss = criterion(pred, labels, kld) + kld
+            if args.use_uncertainty:
+                loss = criterion(pred + 0.5*pred_aux, labels, kld) * 20 + kld.mean()
+            else:
+                loss = criterion(pred + 0.5*pred_aux, labels)# + kld.mean()
 
             if add_loss is not None:
                 loss2 = add_loss(images, pred.to(device))
@@ -861,6 +872,7 @@ def train(trainloader, model, device, interp, optimizer, tot_iter, round_idx, ep
     writer.add_scalar('cbst_enet/train/traversable_plant_IoU', iou[0], writer_idx)
     writer.add_scalar('cbst_enet/train/other_plant_mean_IoU', iou[1], writer_idx)
     writer.add_scalar('cbst_enet/train/learning_rate', optimizer.param_groups[0]['lr'], writer_idx)
+    writer.add_scalar('cbst_enet/train/kld', kld.mean().item(), writer_idx)
   
     #
     # Investigation of labels

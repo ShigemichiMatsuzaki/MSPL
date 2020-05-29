@@ -326,10 +326,11 @@ class ESPDNetwithUncertaintyEstimation(nn.Module):
                 F.interpolate(aux_out, size=x_size, mode='bilinear', align_corners=True))
 
 
-def espdnetue_seg(args):
+def espdnetue_seg(args, load_entire_weights=False):
     classes = args.classes
     scale=args.s
     weights = args.weights
+    print(weights)
     #depth_weights = 'results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200401-114045/espnetv2_2.0_480_checkpoint.pth.tar'
     depth_weights = weights
     dataset=args.dataset
@@ -348,18 +349,28 @@ def espdnetue_seg(args):
 
         print_info_message('Loading pretrained basenet model weights')
         # Load pretrained weights for RGB
-        basenet_dict = model.base_net.state_dict()
         model_dict = model.state_dict()
-        overlap_dict = {k.lstrip("base_net."): v for k, v in pretrained_dict.items() 
-                        if 'base_net' in k and k.lstrip("base_net.") in basenet_dict}
+        print(pretrained_dict.keys())
+        if load_entire_weights:
+            overlap_dict = {k: v for k, v in pretrained_dict.items() 
+                            if k in model_dict}
+        else:
+            basenet_dict = model.base_net.state_dict()
+            overlap_dict = {k.replace("base_net.", ""): v for k, v in pretrained_dict.items() 
+                            if k.replace("base_net.", "") in basenet_dict}
 
         if len(overlap_dict) == 0:
             print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
             exit()
 
         print_info_message('{:.2f} % of weights copied from basenet to segnet'.format(len(overlap_dict) * 1.0/len(model_dict) * 100))
-        basenet_dict.update(overlap_dict)
-        model.base_net.load_state_dict(basenet_dict)
+        if load_entire_weights:
+            model_dict.update(overlap_dict)
+            model.load_state_dict(model_dict)
+        else:
+            basenet_dict.update(overlap_dict)
+            model.base_net.load_state_dict(basenet_dict)
+
         print_info_message('Pretrained basenet model loaded!!')
     else:
         print_warning_message('Training from scratch!!')
