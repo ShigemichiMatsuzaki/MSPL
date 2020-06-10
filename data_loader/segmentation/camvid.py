@@ -59,7 +59,7 @@ id_camvid_to_greenhouse = np.array([
 
 class CamVidSegmentation(data.Dataset):
 
-    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(360, 480), ignore_idx=255, label_conversion=False):
+    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(360, 480), label_conversion=False):
 
         self.train = train
         data_file = os.path.join(root, list_name)
@@ -79,6 +79,11 @@ class CamVidSegmentation(data.Dataset):
                 self.masks.append(label_img_loc)
 
         self.label_conversion = label_conversion
+        if self.label_conversion:
+            self.ignore_idx = 4
+        else:
+            self.ignore_idx = 12
+
         
         if isinstance(size, tuple):
             self.size = size
@@ -91,13 +96,12 @@ class CamVidSegmentation(data.Dataset):
             self.scale = (scale, scale)
 
         self.train_transforms, self.val_transforms = self.transforms()
-        self.ignore_idx = ignore_idx
 
     def transforms(self):
         train_transforms = Compose(
             [
-#                RandomScale(scale=self.scale),
-#                RandomCrop(crop_size=self.size),
+                RandomScale(scale=self.scale),
+                RandomCrop(crop_size=self.size, ignore_idx=self.ignore_idx),
                 Resize(size=self.size),
                 RandomFlip(),
 #                Normalize()
