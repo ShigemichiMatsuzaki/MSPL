@@ -75,11 +75,8 @@ class NIDLoss(nn.Module):
         # Calculate joint histogram
         num_pixel = camera.size()[1] * camera.size()[2]
         batch_size = camera.size()[0]
-#        camera_1d = camera.reshape(camera.size()[0], num_pixel)
         camera_1d = camera.reshape(camera.size()[0], -1)
-#        label_1d = camera.reshape(label.size()[0], num_pixel)
         label_1d = torch.reshape(label, (label.size()[0], -1) ).to('cuda')
-        #print(label_1d.dtype)
 
         P_c = torch.zeros(self.K, num_pixel).to('cuda')
         P_l = torch.zeros(self.C, num_pixel).to('cuda')
@@ -91,42 +88,17 @@ class NIDLoss(nn.Module):
             PI_c = torch.sigmoid((camera_1d - mu_k + L_c/2)/self.bw_camera) - torch.sigmoid((camera_1d - mu_k - L_c/2)/self.bw_camera)
             P_c[k] = torch.sum(PI_c, 0)
             if k < self.C:
-                #PI_l = nn.Sigmoid((label_1d - mu_k + L/2)) - nn.Sigmoid(label_1d - mu_k - L/2))
                 PI_l = torch.sigmoid((label_1d - k + L_l/2)/self.bw_label) - torch.sigmoid((label_1d - k - L_l/2)/self.bw_label)
                 P_l[k] = torch.sum(PI_l, 0)
        
         norm = num_pixel * batch_size
+
         return torch.mm(P_c, torch.t(P_l)) / norm, torch.sum(P_c, 1) / norm, torch.sum(P_l, 1) / norm
-
-    def prior_probability_table(self, data, bins, value_range, bw):
-        num_pixel = data.size()[1] * data.size()[2]
-        batch_size = data.size()[0]
-
-        data_1d = data.reshape(data.size()[0], -1).to('cuda')
-
-        prob_table = torch.zeros(bins, num_pixel).to('cuda')
-
-        L_c = value_range / bins # Size of a bin for the image intensity histogram
-        for k in range(0, bins):
-            mu_k = L_c * (k + 1/2)
-            PI_c = torch.sigmoid((data_1d - mu_k + L_c/2)/bw) - torch.sigmoid((data_1d - mu_k - L_c/2)/bw)
-#            print(mu_k)
-#            print("----PI_c-----")
-#            print(PI_c.max())
-            prob_table[k] = torch.sum(PI_c, 0)
-       
-        return prob_table
 
     def nid(self, p_cl, p_c, p_l, eps=1e-7):
         I = torch.sum(p_cl * (torch.log(p_cl + eps) - torch.log(torch.mm(p_c, torch.t(p_l)) + eps)))
         H = -torch.sum(p_cl * torch.log(p_cl + eps))
-#        print(p_c.sum())
-#        print(p_l.sum())
-#        print(p_cl.sum())
-#        print("I : {}".format(I))
-#        print("H : {}".format(H))
 
-#        return (torch.tensor([[1.0]]) - I/H)
         return 1 - I/H
     
     def forward(self, camera, label):
@@ -134,8 +106,6 @@ class NIDLoss(nn.Module):
 
         label_amax = self.soft_arg_max_layer(label)
         label_amax = label_amax.reshape(label_amax.size()[0], label_amax.size()[2], label_amax.size()[3]).to('cuda')
-        #print(camera_gray.size())
-#        print("label_amax : {}".format(label_amax))
 
         p_cl, p_c, p_l = self.get_probabilities(camera_gray, label_amax)
         p_cl = p_cl / p_cl.sum()
@@ -164,12 +134,9 @@ class SoftArgMax(nn.Module):
         # According to https://discuss.pytorch.org/t/apply-mask-softmax/14212/7
         A_max = torch.max(A, dim=dim, keepdim=True)[0]
         A_exp = torch.exp((A - A_max)*beta)
-    #    A_exp = A_exp * mask  # this step masks
-    #    print("A_exp : {}".format(A_exp.size()))
         A_softmax = A_exp / (torch.sum(A_exp, dim=dim, keepdim=True) + epsilon)
-    #    print("A_softmax : {}".format(A_softmax))
-        #indices = torch.zeros(1, A.size()[1], 1, 1)
         indices = torch.arange(start=0, end=A.size()[dim]).float().reshape(1, A.size()[dim], 1, 1)
+        
     
         return F.conv2d(A_softmax.to('cuda'), indices.to('cuda'))
 
@@ -184,17 +151,12 @@ class UncertaintyWeightedSegmentationLoss(nn.Module):
     def forward(self, pred, target, u_weight, epsilon=1e-12):
         torch.autograd.set_detect_anomaly(True)
         # Calculate softmax probability
-#        p_exp = torch.exp(pred)
-#        p_softmax = p_exp / (torch.sum(p_exp, dim=1) + epsilon)
         batch_size = pred.size()[0]
         H = pred.size()[2]
         W = pred.size()[3]
 
-#        print(pred)
-
         logp = -F.log_softmax(pred, dim=1)
-#        logp = torch.log(pred / pred.sum(dim=1, keepdim=True))
-#        print(pred.sum(dim=1, keepdim=True))
+
         if self.class_weight is not None:
             logp = logp * self.class_weight.reshape(1, self.class_weight.size()[0], 1, 1).expand(batch_size, -1, H, W)
 
@@ -205,7 +167,6 @@ class UncertaintyWeightedSegmentationLoss(nn.Module):
         logp = logp * torch.exp(-u_weight.reshape(batch_size, 1, H, W))
 
         # Rescale so that loss is in approx. same interval
-#        weighted_loss = weighted_logp.sum(1) / weights.view(batch_size, -1).sum(1)
         
         return logp.mean()
 
@@ -214,13 +175,6 @@ class PixelwiseKLD(nn.Module):
         super(PixelwiseKLD, self).__init__()
 
     def forward(self, dist1, dist2):
-        # Calculate softmax probability
-#        p_exp = torch.exp(pred)
-#        p_softmax = p_exp / (torch.sum(p_exp, dim=1) + epsilon)
-#        batch_size = dist1.size()[0]
-#        H = dist1.size()[2]
-#        W = dist1.size()[3]
-
         # Calculate probability and log probability
         p1    = F.softmax(dist1, dim=1)
         logp1 = F.log_softmax(dist1, dim=1)
