@@ -137,6 +137,8 @@ class GreenhouseRGBDSegmentation(data.Dataset):
                 label_img_loc = line_split[1].rstrip()
 #                print(rgb_img_loc)
 #                print(label_img_loc)
+                if not os.path.isfile(rgb_img_loc):
+                    print(rgb_img_loc)
                 assert os.path.isfile(rgb_img_loc)
                 assert os.path.isfile(label_img_loc)
                 if self.use_depth:
