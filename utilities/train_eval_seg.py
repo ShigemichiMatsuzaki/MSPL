@@ -21,8 +21,7 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
     end = time.time()
     model.train()
 
-    miou_class = MIOU(num_classes=num_classes)
-
+    miou_class = MIOU(num_classes=num_classes-1)
     for i, batch in enumerate(dataset_loader):
         inputs = batch[0].to(device=device)
         target = batch[1].to(device=device)
@@ -39,7 +38,7 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
             loss = criterion(outputs, target).mean()
             if add_criterion is not None:
                 loss2 = add_criterion(inputs, outputs.to(device)) * weight
-                loss += loss2            
+                loss += loss2
 
             if isinstance(outputs, (list, tuple)):
                 target_dev = outputs[0].device
@@ -73,6 +72,9 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
             print_log_message("Epoch: %d[%d/%d]\t\tBatch Time:%.4f\t\tLoss:%.4f\t\tmiou:%.4f\t\tNID loss:%.4f" %
                   (epoch, i, len(dataset_loader), batch_time.avg, losses.avg, miou, nid_losses.avg))
 
+    print(inter_meter.sum)
+    print(union_meter.sum)
+    print(inter_meter.sum / (union_meter.sum + 1e-10) * 100)
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
     miou = iou.mean() * 100
 
@@ -85,7 +87,7 @@ def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda'
     batch_time = AverageMeter()
     end = time.time()
 
-    miou_class = MIOU(num_classes=num_classes)
+    miou_class = MIOU(num_classes=num_classes-1)
 
     if criterion:
         losses = AverageMeter()
@@ -151,7 +153,9 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
     end = time.time()
     model.train()
 
-    miou_class = MIOU(num_classes=num_classes)
+    miou_class = MIOU(num_classes=num_classes-1)
+    kld_layer = PixelwiseKLD()
+    print("train_seg_ue()")
     for i, batch in enumerate(dataset_loader):
         inputs = batch[0].to(device=device)
         target = batch[1].to(device=device)
@@ -162,12 +166,13 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
         else:
             outputs, out_aux = model(inputs)
 
+        kld = kld_layer(outputs, out_aux)
         outputs = outputs + 0.5*out_aux
-
+        
         if device == 'cuda':
 #            print("Target size {}".format(target.size()))
 #
-            loss = criterion(outputs, target).mean()
+            loss = criterion(outputs, target).mean() + kld.mean()
             if add_criterion is not None:
                 loss2 = add_criterion(inputs, outputs.to(device)) * weight
                 loss += loss2            
@@ -176,7 +181,7 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
                 target_dev = outputs[0].device
                 outputs = gather(outputs, target_device=target_dev)
         else:
-            loss = criterion(outputs, target)
+            loss = criterion(outputs, target)# + kld.mean()
             if add_criterion is not None:
                 loss2 = add_criterion(inputs, outputs) * weight
                 loss += loss2
@@ -206,6 +211,9 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
 
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
     miou = iou.mean() * 100
+    print(inter_meter.sum)
+    print(union_meter.sum)
+    print(inter_meter.sum / (union_meter.sum + 1e-10) * 100)
 
     return miou, losses.avg
 
@@ -216,7 +224,7 @@ def val_seg_ue(model, dataset_loader, criterion=None, num_classes=21, device='cu
     batch_time = AverageMeter()
     end = time.time()
 
-    miou_class = MIOU(num_classes=num_classes)
+    miou_class = MIOU(num_classes=num_classes-1)
 
     if criterion:
         losses = AverageMeter()

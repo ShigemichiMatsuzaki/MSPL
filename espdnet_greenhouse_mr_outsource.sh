@@ -14,7 +14,7 @@ CUDA_VISIBLE_DEVICES=0 python crst_seg.py \
     --data-src-list ./vision_datasets/camvid/train_camvid.txt \
     --data-tgt-train-list ./vision_datasets/greenhouse/train_greenhouse_more.txt \
     --data-tgt-test-list ./vision_datasets/greenhouse/val_greenhouse.txt \
-    --batch-size 32 \
+    --batch-size 28 \
     --gpu 0 \
     --model espdnet \
     --restore-from /tmp/runs/results_segmentation/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200513-204023/espdnet_2.0_480_best.pth \

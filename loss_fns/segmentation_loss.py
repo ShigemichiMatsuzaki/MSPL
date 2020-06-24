@@ -144,9 +144,13 @@ class SoftArgMax(nn.Module):
         return self.soft_arg_max(x)
 
 class UncertaintyWeightedSegmentationLoss(nn.Module):
-    def __init__(self, class_weight=None):
+    def __init__(self, num_classes, class_weights=None, ignore_idx=None):
         super(UncertaintyWeightedSegmentationLoss, self).__init__()
-        self.class_weight = class_weight
+        self.num_classes = num_classes
+        self.class_weights = class_weights if class_weights is not None else torch.ones(self.num_classes)
+        self.ignore_idx = ignore_idx
+        if self.ignore_idx is not None:
+            self.class_weights[self.ignore_idx] = 0.0
 
     def forward(self, pred, target, u_weight, epsilon=1e-12):
         torch.autograd.set_detect_anomaly(True)
@@ -157,8 +161,8 @@ class UncertaintyWeightedSegmentationLoss(nn.Module):
 
         logp = -F.log_softmax(pred, dim=1)
 
-        if self.class_weight is not None:
-            logp = logp * self.class_weight.reshape(1, self.class_weight.size()[0], 1, 1).expand(batch_size, -1, H, W)
+        # Losses on the pixels of ignore_idx do not contribute to the loss function
+        logp = logp * self.class_weights.reshape(1, self.class_weights.size()[0], 1, 1).expand(batch_size, -1, H, W)
 
         # Gather log probabilities with respect to target
         logp = logp.gather(1, target.view(batch_size, 1, H, W))

@@ -36,6 +36,14 @@ color_encoding = OrderedDict([
     ('background', (0, 0, 0))
 ])
 
+color_palette = [
+    0, 255, 0,
+    0, 255, 255,
+    255, 0, 0,
+    255, 255, 0,
+    0, 0, 0
+]
+
 
 class GreenhouseSegmentation(data.Dataset):
 

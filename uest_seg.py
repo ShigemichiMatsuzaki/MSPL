@@ -408,12 +408,12 @@ def main():
             model = espdnet_seg_with_pre_rgbd(args)
     elif args.model == 'espdnetue':
         from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
-        from model.segmentation.espdnet_ue import espdnetue_seg
+        from model.segmentation.espdnet_ue import espdnetue_seg2
         args.classes = seg_classes
 
         # Import pretrained model trained for giving initial pseudo-labels
         if args.outsource == 'camvid':
-            model = espdnetue_seg(args, load_entire_weights=True)
+            model = espdnetue_seg2(args, load_entire_weights=True, fix_pyr_plane_proj=False)
 
             tmp_args = copy.deepcopy(args)
             tmp_args.trainable_fusion = False
@@ -468,6 +468,17 @@ def main():
     metric = None
     print("Let's start! Hey hey!")
 
+    # Loss functions
+    if args.use_uncertainty:
+        criterion = UncertaintyWeightedSegmentationLoss(seg_classes, class_weights, args.ignore_label)
+    else:
+        criterion = SegmentationLoss(n_classes=seg_classes,
+                                     device=device, ignore_idx=args.ignore_label,
+                                     class_wts=class_weights.to(device))
+
+    criterion_test = SegmentationLoss(n_classes=seg_classes,
+                                     device=device, ignore_idx=args.ignore_label,
+                                     class_wts=class_weights.to(device))
     nid_loss = NIDLoss(image_bin=args.nid_bin, label_bin=seg_classes) if args.use_nid else None
 
     # 
@@ -503,6 +514,7 @@ def main():
                         0, tgt_num, label_2_id, valid_labels,
                         args, logger, class_encoding, writer, args.outsource)
 
+    best_miou = 0.0
     for round_idx in range(args.num_rounds):
 
         ########## pseudo-label generation
@@ -524,11 +536,11 @@ def main():
             # Initial test
             tgt_set = 'test'
             if round_idx:
-                test(model, device, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+                test(model, criterion_test, device, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
                      valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
             else:
                 # Get the initial IoU in the first round for early stop
-                old_miou = test(model, device, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+                old_miou = test(model, criterion_test, device, round_idx, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
                                 valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
 
             # dataloader
@@ -604,7 +616,7 @@ def main():
             for epoch in range(epoch_per_round):
                 #  train(mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx, epoch, args, logger)
                 writer_idx = train(
-                    mix_trainloader, model, device, interp, optimizer, tot_iter, round_idx, 
+                    mix_trainloader, model, criterion, device, interp, optimizer, tot_iter, round_idx, 
                     epoch, args, logger, metric, class_encoding, writer_idx, class_weights, writer, nid_loss)
 
             end = timeit.default_timer()
@@ -612,7 +624,7 @@ def main():
 
             # test self-trained model in target domain test set
             tgt_set = 'test'
-            new_miou = test(model, device, round_idx+1, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+            new_miou = test(model, criterion_test, device, round_idx+1, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
                             valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
 
             if args.early_stop and old_miou - new_miou > 10.0:
@@ -621,13 +633,27 @@ def main():
 
                 return
 
+            # remember best miou and save checkpoint
+            is_best = new_miou > best_miou
+            best_miou = max(new_miou, best_miou)
+            weights_dict = model.module.state_dict() if device == 'cuda' else model.state_dict()
+            extra_info_ckpt = '{}'.format(args.model)
+            if is_best:
+                save_checkpoint({
+                    'epoch': round_idx + 1,
+                    'arch': args.model,
+                    'state_dict': weights_dict,
+                    'best_miou': best_miou,
+                    'optimizer': optimizer.state_dict(),
+                }, is_best, args.savedir, extra_info_ckpt)
+
         elif round_idx == args.num_rounds - 1:
             shutil.rmtree(save_pseudo_label_path)
             tgt_set = 'train'
-            test(model, device, round_idx+1, tgt_set, tgt_num, args.data_tgt_train_list, label_2_id,
+            test(model, criterion_test, device, round_idx+1, tgt_set, tgt_num, args.data_tgt_train_list, label_2_id,
                  valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
             tgt_set = 'test'
-            test(model, device, round_idx+2, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
+            test(model, criterion_test, device, round_idx+2, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
                  valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
 
 """Create the model and start the evaluation process."""
@@ -774,7 +800,7 @@ def val(model, device, save_path, round_idx,
 
     return tgt_train_lst  # return the dictionary containing all the class-wise confidence vectors
 
-def train(trainloader, model, device, interp, optimizer, tot_iter, round_idx, epoch_idx,
+def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, round_idx, epoch_idx,
           args, logger, metric, class_encoding, writer_idx, class_weights=None, writer=None, add_loss=None):
     """Create the model and start the training."""
     epoch_loss = 0
@@ -782,17 +808,12 @@ def train(trainloader, model, device, interp, optimizer, tot_iter, round_idx, ep
     # For logging the training status
     losses = AverageMeter()
     nid_losses = AverageMeter()
+    kld_losses = AverageMeter()
     batch_time = AverageMeter()
     inter_meter = AverageMeter()
     union_meter = AverageMeter()
 
     miou_class = MIOU(num_classes=4)
-    if args.use_uncertainty:
-        criterion = UncertaintyWeightedSegmentationLoss(class_weights)
-    else:
-        criterion = SegmentationLoss(n_classes=4,
-                                     device=device, ignore_idx=args.ignore_label,
-                                     class_wts=class_weights.to(device))
 
     kld_layer = PixelwiseKLD()
     with tqdm(total=len(trainloader)) as pbar:
@@ -834,6 +855,7 @@ def train(trainloader, model, device, interp, optimizer, tot_iter, round_idx, ep
     #        print(pred.size())
             # Model regularizer
             kld = kld_layer(pred, pred_aux)
+            kld_losses.update(kld.mean().item(), 1)
             if args.use_uncertainty:
                 loss = criterion(pred + 0.5*pred_aux, labels, kld) * 20 + kld.mean()
             else:
@@ -872,7 +894,7 @@ def train(trainloader, model, device, interp, optimizer, tot_iter, round_idx, ep
     writer.add_scalar('cbst_enet/train/traversable_plant_IoU', iou[0], writer_idx)
     writer.add_scalar('cbst_enet/train/other_plant_mean_IoU', iou[1], writer_idx)
     writer.add_scalar('cbst_enet/train/learning_rate', optimizer.param_groups[0]['lr'], writer_idx)
-    writer.add_scalar('cbst_enet/train/kld', kld.mean().item(), writer_idx)
+    writer.add_scalar('cbst_enet/train/kld', kld_losses.avg, writer_idx)
   
     #
     # Investigation of labels
@@ -896,7 +918,7 @@ def train(trainloader, model, device, interp, optimizer, tot_iter, round_idx, ep
     return writer_idx
 
 
-def test(model, device, round_idx, tgt_set, test_num, test_list,
+def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
          label_2_id, valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight=0.0):
     """Create the model and start the evaluation process."""
     ## scorer
@@ -916,7 +938,6 @@ def test(model, device, round_idx, tgt_set, test_num, test_list,
 
     miou_class = MIOU(num_classes=4)
 
-    criterion = UncertaintyWeightedSegmentationLoss(class_weights)
     kld_layer = PixelwiseKLD()
     # TODO: Remove the composes
     if args.dataset == 'greenhouse':
@@ -993,7 +1014,7 @@ def test(model, device, round_idx, tgt_set, test_num, test_list,
                     elif args.model == 'espdnetue':
                         (pred, pred_aux) = model(images)
 
-            loss = criterion(pred, labels, torch.max(-F.softmax(pred, 1)+1, 1)[0]) # torch.max returns a tuple of (maxvalues, indices)
+            loss = criterion(pred, labels) # torch.max returns a tuple of (maxvalues, indices)
 
             inter, union = miou_class.get_iou(pred, labels)
     
@@ -1254,7 +1275,7 @@ def parse_split_list(list_name):
             image_list.append(fields[0])
             image_name_list.append(image_name)
             label_list.append(fields[1])
-            if depth_list is not None:
+            if depth_list is not None and len(fields) == 3:
                 depth_list.append(fields[2])
 
             file_num += 1
