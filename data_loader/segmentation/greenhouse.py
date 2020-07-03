@@ -146,11 +146,16 @@ class GreenhouseRGBDSegmentation(data.Dataset):
 #                print(rgb_img_loc)
 #                print(label_img_loc)
                 if not os.path.isfile(rgb_img_loc):
-                    print(rgb_img_loc)
+                    print("Not found : " + rgb_img_loc)
                 assert os.path.isfile(rgb_img_loc)
+
+                if not os.path.isfile(label_img_loc):
+                    print("Not found : " + label_img_loc)
                 assert os.path.isfile(label_img_loc)
                 if self.use_depth:
                     depth_img_loc = line_split[2].rstrip()
+                    if not os.path.isfile(depth_img_loc):
+                        print("Not found : " + depth_img_loc)
                     assert os.path.isfile(depth_img_loc)
 
                 self.images.append(rgb_img_loc)
