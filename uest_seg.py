@@ -413,7 +413,7 @@ def main():
 
         # Import pretrained model trained for giving initial pseudo-labels
         if args.outsource == 'camvid':
-            model = espdnetue_seg2(args, load_entire_weights=True, fix_pyr_plane_proj=False)
+            model = espdnetue_seg2(args, load_entire_weights=True, fix_pyr_plane_proj=True)
 
             tmp_args = copy.deepcopy(args)
             tmp_args.trainable_fusion = False
