@@ -155,9 +155,11 @@ def main(args):
         else:
             seg_classes = len(CAMVID_CLASS_LIST)
             tmp_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False)
-            class_wts = calc_cls_class_weight(tmp_loader, seg_classes)
+
+#            class_wts = calc_cls_class_weight(tmp_loader, seg_classes)
+#            class_wts = torch.from_numpy(class_wts).float().to(device)
+            class_wts = torch.ones(seg_classes)
             print("class weights : {}".format(class_wts))
-            class_wts = torch.from_numpy(class_wts).float().to(device)
 
         args.use_depth = False
     else:
