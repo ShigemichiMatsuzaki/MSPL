@@ -156,9 +156,9 @@ def main(args):
             seg_classes = len(CAMVID_CLASS_LIST)
             tmp_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False)
 
-#            class_wts = calc_cls_class_weight(tmp_loader, seg_classes)
-#            class_wts = torch.from_numpy(class_wts).float().to(device)
-            class_wts = torch.ones(seg_classes)
+            class_wts = calc_cls_class_weight(tmp_loader, seg_classes)
+            class_wts = torch.from_numpy(class_wts).float().to(device)
+#            class_wts = torch.ones(seg_classes)
             print("class weights : {}".format(class_wts))
 
         args.use_depth = False
@@ -185,6 +185,11 @@ def main(args):
         print("Trainable fusion : {}".format(args.trainable_fusion))
         print("Segmentation classes : {}".format(seg_classes))
         model = espdnetue_seg(args)
+    elif args.model == 'deeplabv3':
+        from model.segmentation.deeplabv3 import DeepLabV3
+
+        args.classes = seg_classes
+        model = DeepLabV3(seg_classes)
 
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
@@ -229,7 +234,7 @@ def main(args):
 
     writer = SummaryWriter(log_dir=args.savedir, comment='Training and Validation logs')
     try:
-        writer.add_graph(model, input_to_model=torch.Tensor(1, 3, crop_size[0], crop_size[1]))
+        writer.add_graph(model, input_to_model=torch.Tensor(1, 3, 288, 480))
     except:
         print_log_message("Not able to generate the graph. Likely because your model is not supported by ONNX")
 
@@ -514,6 +519,8 @@ if __name__ == "__main__":
             weight_file_key = '{}_{}'.format('espnetv2', args.s)
             assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)
             args.weights = model_weight_map[weight_file_key]
+        elif args.model == 'deeplabv3':
+            args.weights  = ''
 
     #        if args.use_depth:
     #            args.weights

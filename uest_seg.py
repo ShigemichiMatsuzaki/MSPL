@@ -409,6 +409,7 @@ def main():
     elif args.model == 'espdnetue':
         from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
         from model.segmentation.espdnet_ue import espdnetue_seg2
+        from model.segmentation.deeplabv3 import deeplabv3_seg
         args.classes = seg_classes
 
         # Import pretrained model trained for giving initial pseudo-labels
@@ -423,6 +424,8 @@ def main():
             tmp_args.dataset = 'camvid'
             tmp_args.weights = args.outsource_weights
             model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+#            model_outsource = deeplabv3_seg(num_classes=tmp_args.classes,
+#                weights='/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200704-143957/deeplabv3_2.0_480_best.pth')
 
             from data_loader.segmentation.camvid import CamVidSegmentation
             ds = CamVidSegmentation(
@@ -885,7 +888,7 @@ def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, ro
 #            (iou, miou) = metric.value()
     
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
-    miou = iou[iou != 0.0].mean() * 100
+    miou = iou[[1, 2, 3]].mean() * 100
 
     # Write summary
     writer.add_scalar('cbst_enet/train/loss', losses.avg, writer_idx)
@@ -1097,7 +1100,7 @@ def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
     #        amax_output_col.save('%s/%s_color.png' % (save_test_vis_path, image_name))
 
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
-    miou = iou[iou != 0.0].mean() * 100
+    miou = iou[[1, 2, 3]].mean() * 100
  
     writer.add_scalar('cbst_enet/test/mean_IoU', miou, round_idx)
     writer.add_scalar('cbst_enet/test/loss', losses.avg, round_idx)
