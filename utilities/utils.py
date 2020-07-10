@@ -228,8 +228,8 @@ def calc_cls_class_weight(data_loader, class_num):
     class_array /= class_array.sum() # normalized
 #    class_array = 1 - class_array 
 
-    return 1/(class_array + 1e-10)
-#    return np.exp(class_array)/np.sum(np.exp(class_array)) #/ class_array.sum()
+#    return 1/(class_array + 1e-10)
+    return np.exp(class_array)/np.sum(np.exp(class_array)) #/ class_array.sum()
 
 def set_logger(output_dir=None, log_file=None, debug=False):
     head = '%(asctime)-15s Host %(message)s'

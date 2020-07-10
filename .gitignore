@@ -3,3 +3,4 @@ __pycache__
 .DS_STORE
 .idea
 results_segmentation/
+pretrained_models/

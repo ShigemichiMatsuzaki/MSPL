@@ -1,16 +1,15 @@
-CUDA_VISIBLE_DEVICES=1 python train_segmentation.py \
+CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
   --dataset camvid \
   --data-path ./vision_datasets/camvid/ \
-  --savedir /tmp/runs/results_segmentation \
-  --batch-size 32 \
+  --savedir /tmp/runs/ \
+  --batch-size 64 \
   --crop-size 480 288 \
   --ignore-idx 255 \
   --model espdnet \
   --s 2.0 \
-  --lr 0.009 \
+  --lr 0.01 \
   --scheduler hybrid \
   --clr-max 61 \
-  --use-nid true \
   --epochs 500
 
 # CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \

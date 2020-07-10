@@ -1,8 +1,8 @@
 CUDA_VISIBLE_DEVICES=1 python train_segmentation.py \
   --dataset camvid \
   --data-path ./vision_datasets/camvid/ \
-  --savedir /tmp/runs/results_segmentation \
-  --batch-size 32 \
+  --savedir /tmp/runs/ \
+  --batch-size 64 \
   --crop-size 480 288 \
   --ignore-idx 4 \
   --model espdnetue \
@@ -10,8 +10,8 @@ CUDA_VISIBLE_DEVICES=1 python train_segmentation.py \
   --lr 0.009 \
   --scheduler hybrid \
   --clr-max 61 \
-  --label-conversion true \
-  --epochs 200
+  --epochs 500
+  #--label-conversion true \
 
 # CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
 #   --dataset greenhouse \

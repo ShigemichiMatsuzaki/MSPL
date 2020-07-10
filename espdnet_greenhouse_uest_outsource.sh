@@ -4,33 +4,34 @@ tgt_port=0.5
 #for tgt_port in 0.5; do
 
 # Uncertainty + NID 
-CUDA_VISIBLE_DEVICES=0 python uest_seg.py \
-    --random-mirror \
-    --test-scale 1.0 \
-    --rm-prob \
-    --test-flipping \
-    --num-classes 5 \
-    --learning-rate 0.00001 \
-    --save /tmp/runs/results_segmentation/uest \
-    --data-path ./vision_datasets/ \
-    --data-src greenhouse \
-    --data-src-list ./vision_datasets/camvid/train_camvid.txt \
-    --data-tgt-train-list ./vision_datasets/greenhouse/train_greenhouse_more.txt \
-    --data-tgt-test-list ./vision_datasets/greenhouse/val_greenhouse_more.txt \
-    --batch-size 24 \
-    --gpu 0 \
-    --model espdnetue \
-    --restore-from /tmp/runs/results_segmentation/model_espdnetue_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200610-133810/espdnetue_2.0_480_best.pth \
-    --runs-root /tmp/runs/results_segmentation/uest \
-    --epr 5 \
-    --num-rounds 20 \
-    --use-uncertainty true \
-    --use-nid true \
-    --nid-bin 64 \
-    --use-depth true\
-    --trainable-fusion true\
-    --outsource camvid \
-    --outsource-weights /tmp/runs/results_segmentation/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200608-184240/espdnet_2.0_480_best.pth
+#CUDA_VISIBLE_DEVICES=0 python uest_seg.py \
+#    --random-mirror \
+#    --test-scale 1.0 \
+#    --rm-prob \
+#    --test-flipping \
+#    --num-classes 5 \
+#    --learning-rate 0.00001 \
+#    --save /tmp/runs/uest \
+#    --data-path ./vision_datasets/ \
+#    --data-src greenhouse \
+#    --data-src-list ./vision_datasets/camvid/train_camvid.txt \
+#    --data-tgt-train-list ./vision_datasets/greenhouse/train_greenhouse_more.txt \
+#    --data-tgt-test-list ./vision_datasets/greenhouse/val_greenhouse_more.txt \
+#    --batch-size 24 \
+#    --gpu 0 \
+#    --model espdnetue \
+#    --restore-from /tmp/runs/model_espdnetue_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200630-111157/espdnetue_5_2.0_480_best.pth \
+#    --runs-root /tmp/runs/uest \
+#    --epr 5 \
+#    --num-rounds 20 \
+#    --use-uncertainty true \
+#    --use-nid true \
+#    --nid-bin 64 \
+#    --outsource camvid \
+#    --outsource-weights /tmp/runs/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200630-161402/espdnet_2.0_480_best.pth
+
+#    --use-depth true \
+#    --trainable-fusion true \
 
 # Uncertainty
 CUDA_VISIBLE_DEVICES=0 python uest_seg.py \
@@ -40,24 +41,22 @@ CUDA_VISIBLE_DEVICES=0 python uest_seg.py \
     --test-flipping \
     --num-classes 5 \
     --learning-rate 0.00001 \
-    --save /tmp/runs/results_segmentation/uest \
+    --save /tmp/runs/uest \
     --data-path ./vision_datasets/ \
     --data-src greenhouse \
     --data-src-list ./vision_datasets/camvid/train_camvid.txt \
-    --data-tgt-train-list ./vision_datasets/greenhouse/train_greenhouse_more.txt \
-    --data-tgt-test-list ./vision_datasets/greenhouse/val_greenhouse_more.txt \
+    --data-tgt-train-list ./vision_datasets/greenhouse/train_greenhouse_more.lst \
+    --data-tgt-test-list ./vision_datasets/greenhouse/val_greenhouse_more.lst \
     --batch-size 24 \
     --gpu 0 \
     --model espdnetue \
-    --restore-from /tmp/runs/results_segmentation/model_espdnetue_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200610-133810/espdnetue_5_2.0_480_best.pth \
-    --runs-root /tmp/runs/results_segmentation/uest \
+    --restore-from /tmp/runs/model_espdnetue_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200630-111157/espdnetue_5_2.0_480_best.pth \
+    --runs-root /tmp/runs/uest \
     --epr 5 \
-    --num-rounds 20 \
+    --num-rounds 15 \
     --use-uncertainty true \
-    --use-depth true\
-    --trainable-fusion true\
     --outsource camvid \
-    --outsource-weights /tmp/runs/results_segmentation/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200608-184240/espdnet_2.0_480_best.pth
+    --outsource-weights /tmp/runs/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200630-161402/espdnet_2.0_480_best.pth
 
 # CE + NID
 #CUDA_VISIBLE_DEVICES=1 python uest_seg.py \

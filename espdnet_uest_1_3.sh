@@ -50,7 +50,7 @@ CUDA_VISIBLE_DEVICES=0 python uest_seg.py \
     --batch-size 24 \
     --gpu 0 \
     --model espdnetue \
-    --restore-from /tmp/runs/uest/model_espdnetue_greenhouse/s_2.0_res_480_uest_rgb_os_camvid_ue/20200702-010334/espdnetue_best.pth \
+    --restore-from /tmp/runs/uest/model_espdnetue_greenhouse/s_2.0_res_480_uest_rgb_os_camvid_ue/20200708-164529/espdnetue_best.pth \
     --runs-root /tmp/runs/uest \
     --epr 5 \
     --num-rounds 20 \

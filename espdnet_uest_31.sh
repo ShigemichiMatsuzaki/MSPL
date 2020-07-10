@@ -45,12 +45,12 @@ CUDA_VISIBLE_DEVICES=0 python uest_seg.py \
     --data-path ./vision_datasets/ \
     --data-src greenhouse \
     --data-src-list ./vision_datasets/camvid/train_camvid.txt \
-    --data-tgt-train-list ./vision_datasets/greenhouse/train_greenhouse_more.lst \
+    --data-tgt-train-list ./vision_datasets/greenhouse/train_3_1.lst \
     --data-tgt-test-list ./vision_datasets/greenhouse/val_greenhouse_more.lst \
-    --batch-size 24 \
+    --batch-size 64 \
     --gpu 0 \
     --model espdnetue \
-    --restore-from /tmp/runs/uest/model_espdnetue_greenhouse/s_2.0_res_480_uest_rgb_os_camvid_ue/20200708-164504/espdnetue_best.pth \
+    --restore-from /tmp/runs/model_espdnetue_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200630-111157/espdnetue_5_2.0_480_best.pth \
     --runs-root /tmp/runs/uest \
     --epr 5 \
     --num-rounds 20 \

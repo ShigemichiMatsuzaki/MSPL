@@ -1,7 +1,7 @@
-CUDA_VISIBLE_DEVICES=1 python train_segmentation_label_conversion.py \
+CUDA_VISIBLE_DEVICES=0 python train_segmentation_label_conversion.py \
   --dataset camvid \
   --data-path ./vision_datasets/camvid/ \
-  --savedir /tmp/runs/results_segmentation/ \
+  --savedir /tmp/runs/ \
   --batch-size 20 \
   --crop-size 480 288 \
   --model espdnetue \
