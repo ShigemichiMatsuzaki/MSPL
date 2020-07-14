@@ -56,8 +56,12 @@ CUDA_VISIBLE_DEVICES=0 python uest_seg.py \
     --num-rounds 15 \
     --use-uncertainty true \
     --outsource camvid \
-    --outsource-weights /tmp/runs/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200630-161402/espdnet_2.0_480_best.pth
+    --outsource-weights /tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200713-150748/deeplabv3_2.0_480_best.pth
+    
 
+# --outsource-weights /tmp/runs/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200630-161402/espdnet_2.0_480_best.pth
+# --outsource-weights /tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/deeplabv3_2.0_480_best.pth
+# --outsource-weights /tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200711-141634/deeplabv3_2.0_480_best.pth
 # CE + NID
 #CUDA_VISIBLE_DEVICES=1 python uest_seg.py \
 #    --random-mirror \

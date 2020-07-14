@@ -42,7 +42,8 @@ from loss_fns.segmentation_loss import NIDLoss, UncertaintyWeightedSegmentationL
 ###
 #from enet.model import ENet 
 # For visualization using TensorBoardX
-from tensorboardX import SummaryWriter
+#from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 #from metric.iou import IoU
 from tqdm import tqdm
 from data_loader.segmentation.greenhouse import id_camvid_to_greenhouse
@@ -410,6 +411,7 @@ def main():
         from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
         from model.segmentation.espdnet_ue import espdnetue_seg2
         from model.segmentation.deeplabv3 import deeplabv3_seg
+        from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
         args.classes = seg_classes
 
         # Import pretrained model trained for giving initial pseudo-labels
@@ -423,9 +425,13 @@ def main():
             tmp_args.classes = 13
             tmp_args.dataset = 'camvid'
             tmp_args.weights = args.outsource_weights
-            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+#            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
 #            model_outsource = deeplabv3_seg(num_classes=tmp_args.classes,
 #                weights='/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200704-143957/deeplabv3_2.0_480_best.pth')
+            model_outsource = deeplabv3_resnet101(num_classes=13, aux_loss=True)
+            # Import pre-trained weights
+            #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
+            load_weights(model_outsource, tmp_args.weights)
 
             from data_loader.segmentation.camvid import CamVidSegmentation
             ds = CamVidSegmentation(
@@ -727,6 +733,9 @@ def val(model, device, save_path, round_idx,
                 else:
                     output2 = model(image.to(device), depth.to(device))
 
+                if isinstance(output2, OrderedDict):
+                    output2 = output2['out']
+
                 output = softmax2d(interp(output2)).cpu().data[0].numpy()
     
                 if args.test_flipping: # and args.model == 'ENet':
@@ -737,6 +746,9 @@ def val(model, device, save_path, round_idx,
                         output2 = model(
                             torch.from_numpy(image.numpy()[:,:,:,::-1].copy()).to(device),
                             torch.from_numpy(depth.numpy()[:,:,:,::-1].copy()).to(device))
+
+                    if isinstance(output2, OrderedDict):
+                        output2 = output2['out']
 
                     output = 0.5 * ( output + softmax2d(interp(output2)).cpu().data[0].numpy()[:,:,::-1] )
 
@@ -854,6 +866,10 @@ def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, ro
                         pred = model(images)
                     elif args.model == 'espdnetue':
                         (pred, pred_aux) = model(images)
+                    elif args.model == 'deeplabv3':
+                        output = model(images)
+                        pred = output[0]
+                        pred_aux = output[1]
     
     #        print(pred.size())
             # Model regularizer
@@ -1016,6 +1032,10 @@ def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
                         pred = model(images)
                     elif args.model == 'espdnetue':
                         (pred, pred_aux) = model(images)
+                    elif args.model == 'deeplabv3':
+                        output = model(images)
+                        pred = output[0]
+                        pred_aux = output[1]
 
             loss = criterion(pred, labels) # torch.max returns a tuple of (maxvalues, indices)
 
@@ -1326,6 +1346,22 @@ def savelst_SrcTgt(
                     f.write("%s,%s\n" % (image_tgt_list[idx], image_tgt_path))
 
     return src_train_lst, tgt_train_lst, src_num_sel
+
+def load_weights(model, weights):
+    if os.path.isfile(weights):
+        num_gpus = torch.cuda.device_count()
+        device = 'cuda' if num_gpus >= 1 else 'cpu'
+        pretrained_dict = torch.load(weights, map_location=torch.device(device))
+    else:
+        print('Weight file does not exist at {}. Please check. Exiting!!'.format(weights))
+        exit()
+
+    model_dict = model.state_dict()
+    overlap_dict = {k: v for k, v in pretrained_dict.items() 
+                    if k in model_dict}
+
+    model_dict.update(overlap_dict)
+    model.load_state_dict(model_dict)
 
 class ScoreUpdater(object):
     # only IoU are computed. accu, cls_accu, etc are ignored.
