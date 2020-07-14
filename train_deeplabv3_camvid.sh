@@ -2,7 +2,7 @@ CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
   --dataset camvid \
   --data-path ./vision_datasets/camvid/ \
   --savedir /tmp/runs/ \
-  --batch-size 64 \
+  --batch-size 16 \
   --crop-size 480 288 \
   --ignore-idx 255 \
   --model deeplabv3 \
@@ -10,6 +10,7 @@ CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
   --lr 0.01 \
   --scheduler hybrid \
   --clr-max 61 \
+  --use-aux true \
   --epochs 500
 
 # CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \

@@ -93,6 +93,18 @@ def in_training_visualization_img(model, images, depths=None, labels=None, class
         kld = torchvision.utils.make_grid(kld.cpu()).numpy()
         writer.add_image(data + '/kld', kld, epoch)
         _, predictions = torch.max(f_pred, dim=1)
+    elif isinstance(predictions, OrderedDict):
+        f_pred = predictions['out']
+        if len(predictions) == 2:
+            kld_layer = PixelwiseKLD()
+            f_pred += 0.5 * predictions['aux']
+            kld = kld_layer(predictions['out'], predictions['aux'])
+            kld = (-kld / torch.max(kld).item() + 1)# * 255# Scale to [0, 255]
+            kld = torch.reshape(kld, (kld.size(0), 1, kld.size(1), kld.size(2)))
+            kld = torchvision.utils.make_grid(kld.cpu()).numpy()
+            writer.add_image(data + '/kld', kld, epoch)
+
+        _, predictions = torch.max(f_pred, dim=1)       
     else:
         _, predictions = torch.max(predictions.data, dim=1)
     
@@ -217,7 +229,7 @@ class LongTensorToRGBPIL(object):
 #        return ToPILImage()(color_tensor)
         return color_tensor
 
-def calc_cls_class_weight(data_loader, class_num):
+def calc_cls_class_weight(data_loader, class_num, inverted=False):
     class_array = np.zeros(class_num).astype(np.float32)
 
     for n, batch in enumerate(data_loader):
@@ -228,8 +240,10 @@ def calc_cls_class_weight(data_loader, class_num):
     class_array /= class_array.sum() # normalized
 #    class_array = 1 - class_array 
 
-#    return 1/(class_array + 1e-10)
-    return np.exp(class_array)/np.sum(np.exp(class_array)) #/ class_array.sum()
+    if inverted:
+        return np.exp(class_array)/np.sum(np.exp(class_array)) #/ class_array.sum()
+    else:
+        return 1/(class_array + 1e-10)
 
 def set_logger(output_dir=None, log_file=None, debug=False):
     head = '%(asctime)-15s Host %(message)s'

@@ -12,8 +12,9 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, calc_cls_class_weight
-# from torch.utils.tensorboard import SummaryWriter
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
+#from tensorboardX import SummaryWriter
+
 from loss_fns.segmentation_loss import SegmentationLoss, NIDLoss
 import random
 import math
@@ -156,9 +157,9 @@ def main(args):
             seg_classes = len(CAMVID_CLASS_LIST)
             tmp_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False)
 
-            class_wts = calc_cls_class_weight(tmp_loader, seg_classes)
+            class_wts = calc_cls_class_weight(tmp_loader, seg_classes, inverted=True)
             class_wts = torch.from_numpy(class_wts).float().to(device)
-#            class_wts = torch.ones(seg_classes)
+            class_wts = torch.ones(seg_classes)
             print("class weights : {}".format(class_wts))
 
         args.use_depth = False
@@ -186,10 +187,13 @@ def main(args):
         print("Segmentation classes : {}".format(seg_classes))
         model = espdnetue_seg(args)
     elif args.model == 'deeplabv3':
-        from model.segmentation.deeplabv3 import DeepLabV3
+        # from model.segmentation.deeplabv3 import DeepLabV3
+        from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
 
         args.classes = seg_classes
-        model = DeepLabV3(seg_classes)
+        # model = DeepLabV3(seg_classes)
+        model = deeplabv3_resnet101(num_classes=seg_classes, aux_loss=True)
+        torch.backends.cudnn.enabled = False
 
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
@@ -215,8 +219,10 @@ def main(args):
                 m.weight.requires_grad = False
                 m.bias.requires_grad = False
 
+    if args.model == 'deeplabv3':
+        train_params = [{'params': model.parameters(), 'lr': args.lr}]
 
-    if args.use_depth:
+    elif args.use_depth:
         train_params = [{'params': model.get_basenet_params(), 'lr': args.lr},
                         {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult},
                         {'params': model.get_depth_encoder_params(), 'lr': args.lr * args.lr_mult}]
@@ -331,14 +337,15 @@ def main(args):
         # This can be done inside the MyLRScheduler
         lr_seg = lr_base * args.lr_mult
         optimizer.param_groups[0]['lr'] = lr_base
-        optimizer.param_groups[1]['lr'] = lr_seg
+        if len(optimizer.param_groups) > 1:
+            optimizer.param_groups[1]['lr'] = lr_seg
         if args.use_depth:
             optimizer.param_groups[2]['lr'] = lr_base
 
         print_info_message(
             'Running epoch {} with learning rates: base_net {:.6f}, segment_net {:.6f}'.format(epoch, lr_base, lr_seg))
 
-        if args.model == 'espdnetue':
+        if args.model == 'espdnetue' or (args.model == 'deeplabv3' and args.use_aux):
             from utilities.train_eval_seg import train_seg_ue as train
             from utilities.train_eval_seg import val_seg_ue as val
         else:
@@ -483,6 +490,7 @@ if __name__ == "__main__":
     parser.add_argument('--dense-fuse', default=False, type=bool, help='Use depth')
     parser.add_argument('--label-conversion', default=False, type=bool, help='Use label conversion in CamVid')
     parser.add_argument('--use-nid', default=False, type=bool, help='Use NID loss')
+    parser.add_argument('--use-aux', default=False, type=bool, help='Use auxiliary loss')
 
     args = parser.parse_args()
 

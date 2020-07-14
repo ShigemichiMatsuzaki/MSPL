@@ -10,6 +10,7 @@ from utilities.metrics.segmentation_miou import MIOU
 from utilities.print_utils import *
 from torch.nn.parallel import gather
 from loss_fns.segmentation_loss import SegmentationLoss, NIDLoss, PixelwiseKLD
+from collections import OrderedDict
 
 def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, device='cuda', use_depth=False, add_criterion=None, weight=1.0):
     losses = AverageMeter()
@@ -31,6 +32,9 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
             outputs = model(inputs, depth)
         else:
             outputs = model(inputs)
+
+        if isinstance(outputs, OrderedDict):
+            outputs = outputs['out']
 
         if device == 'cuda':
 #            print("Target size {}".format(target.size()))
@@ -103,6 +107,9 @@ def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda'
             else:
                 outputs = model(inputs)
 
+            if isinstance(outputs, OrderedDict):
+                outputs = outputs['out']
+
             if criterion:
                 if device == 'cuda':
                     loss = criterion(outputs, target).mean()
@@ -162,9 +169,16 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
 
         if use_depth:
             depth = batch[2].to(device=device)
-            outputs, out_aux = model(inputs, depth)
+            outputs = model(inputs, depth)
         else:
-            outputs, out_aux = model(inputs)
+            outputs = model(inputs)
+
+        if isinstance(outputs, OrderedDict):
+            out_aux = outputs['aux']
+            outputs = outputs['out']
+        else:
+            out_aux = outputs[1]
+            outputs = outputs[0]
 
         kld = kld_layer(outputs, out_aux)
         outputs = outputs + 0.5*out_aux
@@ -172,7 +186,7 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
         if device == 'cuda':
 #            print("Target size {}".format(target.size()))
 #
-            loss = criterion(outputs, target).mean() + kld.mean()
+            loss = criterion(outputs, target).mean() # + kld.mean()
             if add_criterion is not None:
                 loss2 = add_criterion(inputs, outputs.to(device)) * weight
                 loss += loss2            
@@ -236,9 +250,16 @@ def val_seg_ue(model, dataset_loader, criterion=None, num_classes=21, device='cu
             
             if use_depth:
                 depth = batch[2].to(device=device)
-                outputs, out_aux = model(inputs, depth)
+                outputs = model(inputs, depth)
             else:
-                outputs, out_aux = model(inputs)
+                outputs = model(inputs)
+
+            if isinstance(outputs, OrderedDict):
+                out_aux = outputs['aux']
+                outputs = outputs['out']
+            else:
+                out_aux = outputs[1]
+                outputs = outputs[0]
 
             outputs = outputs + 0.5 * out_aux
 
