@@ -13,8 +13,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, calc_cls_class_weight
-# from torch.utils.tensorboard import SummaryWriter
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
+#from tensorboardX import SummaryWriter
 from loss_fns.segmentation_loss import SegmentationLoss, NIDLoss
 import random
 import math
@@ -148,9 +148,9 @@ def main(args):
             from model.segmentation.espdnet_ue import espdnetue_seg2
             args.classes = seg_classes
             print("Trainable fusion : {}".format(args.trainable_fusion))
-            print("Segmentation classes : {}".format(seg_classes))
+            ("Segmentation classes : {}".format(seg_classes))
             print(args.weights)
-            model = espdnetue_seg2(args, False)
+            model = espdnetue_seg2(args, False, fix_pyr_plane_proj=True)
         else:
             print_error_message('Arch: {} not yet supported'.format(args.model))
             exit(-1)

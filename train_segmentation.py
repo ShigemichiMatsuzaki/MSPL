@@ -42,11 +42,9 @@ def main(args):
         seg_classes = len(VOC_CLASS_LIST)
         class_wts = torch.ones(seg_classes)
     elif args.dataset == 'city':
-        from data_loader.segmentation.cityscapes import CityscapesSegmentation, CITYSCAPE_CLASS_LIST
-        train_dataset = CityscapesSegmentation(root=args.data_path, train=True, size=crop_size, scale=args.scale,
-                                               coarse=args.coarse)
-        val_dataset = CityscapesSegmentation(root=args.data_path, train=False, size=crop_size, scale=args.scale,
-                                             coarse=False)
+        from data_loader.segmentation.cityscapes import CityscapesSegmentation, CITYSCAPE_CLASS_LIST, color_encoding
+        train_dataset = CityscapesSegmentation(root=args.data_path, train=True, coarse=False)
+        val_dataset = CityscapesSegmentation(root=args.data_path, train=False, coarse=False)
         seg_classes = len(CITYSCAPE_CLASS_LIST)
         class_wts = torch.ones(seg_classes)
         class_wts[0] = 2.8149201869965
@@ -144,10 +142,10 @@ def main(args):
         from data_loader.segmentation.camvid import CamVidSegmentation, CAMVID_CLASS_LIST, color_encoding
         train_dataset = CamVidSegmentation(
             root=args.data_path, list_name='train_camvid.txt', 
-            train=True, size=crop_size, scale=args.scale, label_conversion=args.label_conversion)
+            train=True, size=crop_size, scale=args.scale, label_conversion=args.label_conversion, normalize=args.normalize)
         val_dataset = CamVidSegmentation(
             root=args.data_path, list_name='val_camvid.txt',
-            train=False, size=crop_size, scale=args.scale, label_conversion=args.label_conversion)
+            train=False, size=crop_size, scale=args.scale, label_conversion=args.label_conversion, normalize=args.normalize)
 
         if args.label_conversion:
             from data_loader.segmentation.greenhouse import GREENHOUSE_CLASS_LIST, color_encoding
@@ -159,7 +157,7 @@ def main(args):
 
             class_wts = calc_cls_class_weight(tmp_loader, seg_classes, inverted=True)
             class_wts = torch.from_numpy(class_wts).float().to(device)
-            class_wts = torch.ones(seg_classes)
+#            class_wts = torch.ones(seg_classes)
             print("class weights : {}".format(class_wts))
 
         args.use_depth = False
@@ -181,11 +179,11 @@ def main(args):
         print("Segmentation classes : {}".format(seg_classes))
         model = espdnet_seg(args)
     elif args.model == 'espdnetue':
-        from model.segmentation.espdnet_ue import espdnetue_seg
+        from model.segmentation.espdnet_ue import espdnetue_seg2
         args.classes = seg_classes
         print("Trainable fusion : {}".format(args.trainable_fusion))
         print("Segmentation classes : {}".format(seg_classes))
-        model = espdnetue_seg(args)
+        model = espdnetue_seg2(args, fix_pyr_plane_proj=True)
     elif args.model == 'deeplabv3':
         # from model.segmentation.deeplabv3 import DeepLabV3
         from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
@@ -491,6 +489,7 @@ if __name__ == "__main__":
     parser.add_argument('--label-conversion', default=False, type=bool, help='Use label conversion in CamVid')
     parser.add_argument('--use-nid', default=False, type=bool, help='Use NID loss')
     parser.add_argument('--use-aux', default=False, type=bool, help='Use auxiliary loss')
+    parser.add_argument('--normalize', default=False, type=bool, help='Use auxiliary loss')
 
     args = parser.parse_args()
 
