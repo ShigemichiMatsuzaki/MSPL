@@ -47,6 +47,7 @@ from torch.utils.tensorboard import SummaryWriter
 #from metric.iou import IoU
 from tqdm import tqdm
 from data_loader.segmentation.greenhouse import id_camvid_to_greenhouse
+from data_loader.segmentation.greenhouse import id_cityscapes_to_greenhouse
 
 ### shared ###
 IMG_MEAN = np.array((0.406, 0.456, 0.485), dtype=np.float32) # BGR
@@ -275,7 +276,9 @@ def get_arguments():
     parser.add_argument('--dense-fuse', default=False, type=bool, help='Use depth')
     parser.add_argument("--outsource", type=str, default=None, dest='outsource',
                         help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
-    parser.add_argument("--outsource-weights", type=str, default='./results_segmentation/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb_/20200420-095339/espdnet_2.0_480_best.pth', dest='outsource_weights',
+    parser.add_argument("--os-model", type=str, default="espdnet", dest='os_model',
+                        help="Model for generating pseudo-labels")
+    parser.add_argument("--os-weights", type=str, default='./results_segmentation/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb_/20200420-095339/espdnet_2.0_480_best.pth', dest='os_weights',
                         help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
     parser.add_argument("--use-traversable", type=str, default=False, dest='use_traversable',
                         help="Whether to use a class 'traversable plant'")
@@ -284,6 +287,8 @@ def get_arguments():
     parser.add_argument('--use-nid', default=False, type=bool, help='Use NID loss')
     parser.add_argument('--nid-bin', default=32, type=int, help='Bin size of an image intensity histogram in calculating  NID loss')
     parser.add_argument('--use-uncertainty', default=False, type=bool, help='Use uncertainty weighting')
+    parser.add_argument("--tidyup", type=bool, default=True,
+                        help="Whether to remove label images etc. after the training")
 
     return parser.parse_args()
 
@@ -360,7 +365,7 @@ def main():
     if args.dataset == 'greenhouse':
         from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
 
-        class_weights = np.load('class_weights.npy')[:4]
+        class_weights = np.load('class_weights.npy')# [:4]
         class_weights = torch.from_numpy(class_weights).float().to(device)
 
         seg_classes = len(GREENHOUSE_CLASS_LIST)
@@ -382,68 +387,96 @@ def main():
     if args.model == 'espdnet':
         from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
         args.classes = seg_classes
+        model = espdnet_seg_with_pre_rgbd(args, load_entire_weights=True)
 
-        # Import pretrained model trained for giving initial pseudo-labels
-        if args.outsource == 'camvid':
-            model = espdnet_seg_with_pre_rgbd(args, load_entire_weights=True)
-
-            tmp_args = copy.deepcopy(args)
-            tmp_args.trainable_fusion = False
-            tmp_args.dense_fuse = False
-            tmp_args.use_depth  = False
-            tmp_args.classes = 13
-            tmp_args.dataset = 'camvid'
-            tmp_args.weights = args.outsource_weights
-            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
-
-            from data_loader.segmentation.camvid import CamVidSegmentation
-            ds = CamVidSegmentation(
-                root='', list_name=args.data_src_list, train=True, label_conversion=True)
-            tmp_loader = torch.utils.data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
-            
-            print("Calculate class weights!")
-            class_weights = calc_cls_class_weight(tmp_loader, args.num_classes_seg)
-            print(class_weights)
-            class_weights = torch.from_numpy(class_weights).float().to(device)
-        elif args.outsource is None:
-            model = espdnet_seg_with_pre_rgbd(args)
     elif args.model == 'espdnetue':
-        from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
         from model.segmentation.espdnet_ue import espdnetue_seg2
-        from model.segmentation.deeplabv3 import deeplabv3_seg
-        from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
         args.classes = seg_classes
+        model = espdnetue_seg2(args, load_entire_weights=True, fix_pyr_plane_proj=True)
+            
+    elif args.model == 'deeplabv3':
+        from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
+        model = deeplabv3_resnet101(num_classes=seg_classes, aux_loss=True)
 
-        # Import pretrained model trained for giving initial pseudo-labels
-        if args.outsource == 'camvid':
-            model = espdnetue_seg2(args, load_entire_weights=True, fix_pyr_plane_proj=True)
-
+    # Outsource
+    # Import pretrained model trained for giving initial pseudo-labels
+    if args.outsource == 'camvid':
+        os_seg_classes = 13
+        # Import model
+        if args.os_model == 'espdnet':
+            from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
             tmp_args = copy.deepcopy(args)
             tmp_args.trainable_fusion = False
             tmp_args.dense_fuse = False
             tmp_args.use_depth  = False
-            tmp_args.classes = 13
+            tmp_args.classes = os_seg_classes
             tmp_args.dataset = 'camvid'
-            tmp_args.weights = args.outsource_weights
-#            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
-#            model_outsource = deeplabv3_seg(num_classes=tmp_args.classes,
-#                weights='/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200704-143957/deeplabv3_2.0_480_best.pth')
-            model_outsource = deeplabv3_resnet101(num_classes=13, aux_loss=True)
+            tmp_args.weights = args.os_weights
+            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+        elif args.os_model == 'espdnetue':
+            from model.segmentation.espdnet_ue import espdnetue_seg2
+            tmp_args = copy.deepcopy(args)
+            tmp_args.trainable_fusion = False
+            tmp_args.dense_fuse = False
+            tmp_args.use_depth  = False
+            tmp_args.classes = os_seg_classes
+            tmp_args.dataset = 'camvid'
+            tmp_args.weights = args.os_weights
+           
+            model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
+        elif args.os_model == 'deeplabv3':
+            from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
+
+            model_outsource = deeplabv3_resnet101(num_classes=os_seg_classes, aux_loss=True)
             # Import pre-trained weights
             #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
-            load_weights(model_outsource, tmp_args.weights)
+            load_weights(model_outsource, args.os_weights)
 
-            from data_loader.segmentation.camvid import CamVidSegmentation
-            ds = CamVidSegmentation(
-                root='', list_name=args.data_src_list, train=True, label_conversion=True)
-            tmp_loader = torch.utils.data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
-            
-            print("Calculate class weights!")
-            class_weights = calc_cls_class_weight(tmp_loader, args.num_classes_seg)
-            print(class_weights)
-            class_weights = torch.from_numpy(class_weights).float().to(device)
-        elif args.outsource is None:
-            model = espdnet_seg(args)
+        # Calculate class weights from the outsource dataset
+        from data_loader.segmentation.camvid import CamVidSegmentation
+        ds = CamVidSegmentation(
+            root='', list_name=args.data_src_list, train=True, label_conversion=True)
+        tmp_loader = torch.utils.data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
+        
+        print("Calculate class weights!")
+        class_weights = calc_cls_class_weight(tmp_loader, args.num_classes_seg)
+        print(class_weights)
+        class_weights = torch.from_numpy(class_weights).float().to(device)
+    elif args.outsource == 'cityscapes':
+        os_seg_classes = 19
+        if args.os_model == 'espdnet':
+            from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
+            tmp_args = copy.deepcopy(args)
+            tmp_args.trainable_fusion = False
+            tmp_args.dense_fuse = False
+            tmp_args.use_depth  = False
+            tmp_args.classes = os_seg_classes
+            tmp_args.dataset = 'cityscapes'
+            tmp_args.weights = args.os_weights
+
+            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+        elif args.os_model == 'espdnetue':
+            from model.segmentation.espdnet_ue import espdnetue_seg2
+            tmp_args = copy.deepcopy(args)
+            tmp_args.trainable_fusion = False
+            tmp_args.dense_fuse = False
+            tmp_args.use_depth  = False
+            tmp_args.classes = os_seg_classes
+            tmp_args.dataset = 'cityscapes'
+            tmp_args.weights = args.os_weights
+           
+            model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
+
+        elif args.os_model == 'deeplabv3':
+            from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
+            model_outsource = deeplabv3_resnet101(num_classes=os_seg_classes, aux_loss=True)
+            # Import pre-trained weights
+            #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
+            load_weights(model_outsource, args.os_weights)
+
+        class_weights = torch.ones(seg_classes)
+        print(class_weights)
+
 
     print("Model {} is load successfully!".format(args.restore_from))
 
@@ -519,9 +552,14 @@ def main():
     if not os.path.exists(save_conf_path):
         os.makedirs(save_conf_path)
 
-    tgt_train_lst = val(model_outsource, device, save_path, 
-                        0, tgt_num, label_2_id, valid_labels,
-                        args, logger, class_encoding, writer, args.outsource)
+    if args.outsource is not None:
+        tgt_train_lst = val(model_outsource, device, save_path, 
+                            0, tgt_num, label_2_id, valid_labels,
+                            args, logger, class_encoding, writer, args.outsource)
+    else:
+        tgt_train_lst = val(model, device, save_path, 
+                            0, tgt_num, label_2_id, valid_labels,
+                            args, logger, class_encoding, writer)
 
     best_miou = 0.0
     for round_idx in range(args.num_rounds):
@@ -665,6 +703,14 @@ def main():
             test(model, criterion_test, device, round_idx+2, tgt_set, test_num, args.data_tgt_test_list, label_2_id,
                  valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight_tgt)
 
+    # Remove label images and weight files
+    if args.tidyup:
+        shutil.rmtree(osp.join(save_path, 'pred_vis'))
+        shutil.rmtree(osp.join(save_path, 'prob'))
+        shutil.rmtree(osp.join(save_path, 'pred'))
+        shutil.rmtree(osp.join(save_path, 'conf'))
+
+
 """Create the model and start the evaluation process."""
 def val(model, device, save_path, round_idx, 
         tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer, outsource=None):
@@ -728,18 +774,23 @@ def val(model, device, save_path, round_idx,
                     image, label, name, _ = batch
 
                 # if args.model == 'ENet':
-                if not args.use_depth or outsource == 'camvid':
+                if not args.use_depth: #or outsource == 'camvid':
                     output2 = model(image.to(device))
                 else:
                     output2 = model(image.to(device), depth.to(device))
 
                 if isinstance(output2, OrderedDict):
-                    output2 = output2['out']
+                    if len(output2) == 2:
+                        output2 = output2['out'] + 0.5 * output2['aux']
+                    else:
+                        output2 = output2['out']
+                elif args.model == 'espdnetue':
+                    output2 = output2[0] + 0.5 * output2[1]
 
                 output = softmax2d(interp(output2)).cpu().data[0].numpy()
     
                 if args.test_flipping: # and args.model == 'ENet':
-                    if not args.use_depth or outsource == 'camvid':
+                    if not args.use_depth:# or outsource == 'camvid':
                         output2 = model(
                             torch.from_numpy(image.numpy()[:,:,:,::-1].copy()).to(device))
                     else:
@@ -748,14 +799,22 @@ def val(model, device, save_path, round_idx,
                             torch.from_numpy(depth.numpy()[:,:,:,::-1].copy()).to(device))
 
                     if isinstance(output2, OrderedDict):
-                        output2 = output2['out']
+                        if len(output2) == 2:
+                            output2 = output2['out'] + 0.5 * output2['aux']
+                        else:
+                            output2 = output2['out']
+                    elif args.model == 'espdnetue':
+                        output2 = output2[0] + 0.5 * output2[1]
+
 
                     output = 0.5 * ( output + softmax2d(interp(output2)).cpu().data[0].numpy()[:,:,::-1] )
 
                 # If the label is transfered from an external dataset,
                 #   convert the output tensor (numpy)
-                if outsource == 'camvid':
-                    output = transfer_camvid_output_to_greenhouse(output)
+#                if outsource == 'camvid':
+#                    output = transfer_output_to_greenhouse(id_camvid_to_greenhouse, output)
+#                elif outsource == 'cityscapes':
+#                    output = transfer_output_to_greenhouse(id_cityscapes_to_greenhouse, output)
 
                 output = output.transpose(1,2,0)
                 amax_output = np.asarray(np.argmax(output, axis=2), dtype=np.uint8)
@@ -766,9 +825,11 @@ def val(model, device, save_path, round_idx,
     
                 # save visualized seg maps & predication prob map
                 if outsource == 'camvid':
-                    amax_output_col = colorize_mask(id_camvid_to_greenhouse[amax_output])
-                else:
-                    amax_output_col = colorize_mask(amax_output)
+                    amax_output = id_camvid_to_greenhouse[amax_output]
+                elif outsource == 'cityscapes':
+                    amax_output = id_cityscapes_to_greenhouse[amax_output]
+
+                amax_output_col = colorize_mask(amax_output)
 
     #            label = label_2_id[np.asarray(label.numpy(), dtype=np.uint8)]
                 path_name = name[0]
@@ -778,7 +839,7 @@ def val(model, device, save_path, round_idx,
                 np.save('%s/%s.npy' % (save_prob_path, image_name), output)
                 np.save('%s/%s.npy' % (save_conf_path, image_name), conf)
                 # trainIDs/vis seg maps
-                amax_output = Image.fromarray(amax_output)
+                amax_output = Image.fromarray(amax_output.astype(np.uint8))
                 # Save the predicted images (+ colorred images for visualization)
                 amax_output.save('%s/%s.png' % (save_pred_path, image_name))
                 amax_output_col.save('%s/%s_color.png' % (save_pred_vis_path, image_name))
@@ -1470,20 +1531,21 @@ def adjust_learning_rate(optimizer, i_iter, tot_iter):
     optimizer.param_groups[0]['lr'] = lr
     # optimizer.param_groups[1]['lr'] = lr * 10
 
-def transfer_camvid_id_to_greenhouse(output_amax_np):
+def transfer_id_to_greenhouse(id_to_greenhouse, output_amax_np):
 
-    return id_camvid_to_greenhouse[output_amax_np]
+    return id_to_greenhouse[output_amax_np]
 
-def transfer_camvid_output_to_greenhouse(output_camvid_np):
+def transfer_output_to_greenhouse(id_to_greenhouse, output_np):
    # output_greenhouse_np = np.array([]) #args.num_classes_seg
-    output_shape = (1, output_camvid_np.shape[1], output_camvid_np.shape[2])
+    output_shape = (1, output_np.shape[1], output_np.shape[2])
 
     # ID 0:traversable plant is not transfered from CamVid
     output_greenhouse_np = np.zeros(output_shape)
     for gh_class_id in range(1, args.num_classes_seg):
-        bool_index = id_camvid_to_greenhouse == gh_class_id
+        bool_index = id_to_greenhouse == gh_class_id
+#        print(bool_index.shape)
         if bool_index.sum():
-            output_gh_class = output_camvid_np[bool_index].max(axis=0).reshape(output_shape)
+            output_gh_class = output_np[bool_index].max(axis=0).reshape(output_shape)
         else:
             output_gh_class = np.zeros(output_shape)
 
