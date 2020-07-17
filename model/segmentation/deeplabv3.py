@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
+from collections import OrderedDict
 
 import os
 
@@ -97,15 +98,15 @@ def deeplabv3_seg(num_classes=20, weights='pretrained_models/resnet/resnet50-19c
 
 if __name__ == '__main__':
     # model = deeplabv3_seg(num_classes=13, weights='/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200704-230619/deeplabv3_2.0_480_best.pth')
+    print(torch.backends.cudnn.version())
 
-    model = deeplabv3_resnet101(aux_loss=True)
-    model.eval()
-    model_dict = model.state_dict()
-
-    print(model_dict.keys())
-
-    out = model(torch.rand(1, 3, 256, 480))
-
-    print(out.keys())
-    print(out['out'].size())
-    print(out['aux'].size())
+#    model = deeplabv3_resnet101(aux_loss=True)
+#    model.eval()
+#    model_dict = model.state_dict()
+#
+#    # print(model_dict.keys())
+#
+#    out = model(torch.rand(1, 3, 256, 480))
+#
+#    print(isinstance(out, OrderedDict))
+#    print(out.values())
