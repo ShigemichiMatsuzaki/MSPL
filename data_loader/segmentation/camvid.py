@@ -59,10 +59,11 @@ id_camvid_to_greenhouse = np.array([
 
 class CamVidSegmentation(data.Dataset):
 
-    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(360, 480), label_conversion=False):
+    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(360, 480), label_conversion=False, normalize=True):
 
         self.train = train
         data_file = os.path.join(root, list_name)
+        self.normalize = normalize
 
         self.images = []
         self.masks = []
@@ -104,15 +105,13 @@ class CamVidSegmentation(data.Dataset):
                 RandomCrop(crop_size=self.size, ignore_idx=self.ignore_idx),
                 Resize(size=self.size),
                 RandomFlip(),
-#                Normalize()
-                Tensorize()
+                Normalize() if self.normalize else Tensorize()
             ]
         )
         val_transforms = Compose(
             [
                 Resize(size=self.size),
-#                Normalize()
-                Tensorize()
+                Normalize() if self.normalize else Tensorize()
             ]
         )
         return train_transforms, val_transforms

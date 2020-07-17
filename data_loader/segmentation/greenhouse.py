@@ -27,6 +27,28 @@ id_camvid_to_greenhouse = np.array([
     2, # Road_marking(?)
     4  # Unlabeled
 ])
+id_cityscapes_to_greenhouse = np.array([
+    3, # Road
+    3, # Sidewalk
+    2, # Building
+    2, # Wall
+    2, # Fence
+    2, # Pole
+    2, # Traffic light
+    2, # Traffic sign
+    1, # Vegetation
+    3, # Terrain
+    4, # Sky
+    4, # Person
+    4, # Rider
+    2, # Car
+    2, # Truck
+    2, # Bus
+    2, # Train
+    2, # Motorcycle
+    2, # Bicycle
+    4 # Background
+])
 
 color_encoding = OrderedDict([
     ('end_of_plant', (0, 255, 0)),
@@ -44,10 +66,10 @@ color_palette = [
     0, 0, 0
 ]
 
-
 class GreenhouseSegmentation(data.Dataset):
 
-    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 256), ignore_idx=255, coarse=True):
+    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 256), 
+                 ignore_idx=255, coarse=True, normalize=True):
 
         self.train = train
         if self.train:
@@ -56,6 +78,8 @@ class GreenhouseSegmentation(data.Dataset):
                 coarse_data_file = os.path.join(root, list_name)
         else:
             data_file = os.path.join(root, list_name)
+
+        self.normalize = normalize
 
         self.images = []
         self.masks = []
@@ -90,13 +114,13 @@ class GreenhouseSegmentation(data.Dataset):
                 # RandomScale(scale=self.scale),
                 RandomCrop(crop_size=self.size),
                 RandomFlip(),
-                Normalize()
+                Normalize() if self.normalize else Tensorize()
             ]
         )
         val_transforms = Compose(
             [
                 Resize(size=self.size),
-                Normalize()
+                Normalize() if self.normalize else Tensorize()
             ]
         )
         return train_transforms, val_transforms
@@ -120,11 +144,13 @@ class GreenhouseSegmentation(data.Dataset):
 
 class GreenhouseRGBDSegmentation(data.Dataset):
 
-    def __init__(self, root=None, list_name=None, train=True, scale=(0.5, 2.0), size=(480, 256), use_depth=True, reg_weights=0.0, use_traversable=True):
+    def __init__(self, root=None, list_name=None, train=True, scale=(0.5, 2.0), size=(480, 256),
+                 use_depth=True, reg_weights=0.0, use_traversable=True, normalize=True):
         self.train = train
         self.use_depth = use_depth
         self.reg_weight = reg_weights
         self.use_traversable = use_traversable
+        self.normalize = normalize
 #        if self.train:
         if root:
             data_file = os.path.join(root, list_name)
@@ -182,15 +208,13 @@ class GreenhouseRGBDSegmentation(data.Dataset):
 #                RandomCrop(crop_size=self.size),
                 Resize(size=self.size),
                 RandomFlip(),
-                #Normalize()
-                Tensorize()
+                Normalize() if self.normalize else Tensorize()
             ]
         )
         val_transforms = Compose(
             [
                 Resize(size=self.size),
-                #Normalize()
-                Tensorize()
+                Normalize() if self.normalize else Tensorize()
             ]
         )
         return train_transforms, val_transforms
@@ -322,7 +346,8 @@ class GreenhouseDepth(data.Dataset):
 
 class GreenhouseRGBDSegCls(data.Dataset):
 
-    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 256), ignore_idx=4, use_depth=True, use_traversable=False):
+    def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 256), 
+                 ignore_idx=4, use_depth=True, use_traversable=False, normalize=True):
 
         self.train = train
         self.use_depth = use_depth
@@ -330,6 +355,8 @@ class GreenhouseRGBDSegCls(data.Dataset):
             data_file = os.path.join(root, list_name)
         else:
             data_file = os.path.join(root, list_name)
+
+        self.normalize = normalize
 
         self.images = []
         self.masks = []
@@ -388,14 +415,13 @@ class GreenhouseRGBDSegCls(data.Dataset):
                 Resize(size=self.size),
                 RandomFlip(),
                 #Normalize()
-                Tensorize()
+                Normalize() if self.normalize else Tensorize()
             ]
         )
         val_transforms = Compose(
             [
                 Resize(size=self.size),
-                #Normalize()
-                Tensorize()
+                Normalize() if self.normalize else Tensorize()
             ]
         )
         return train_transforms, val_transforms
@@ -458,7 +484,7 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
     def __init__(self, list_path, reg_weight = 0.0, rare_id = None,
                  mine_id = None, mine_chance = None, pseudo_root = None, max_iters=None,
                  size=(256, 480), mean=(128, 128, 128), std = (1,1,1), scale=(0.5, 1.5), mirror=True, ignore_label=255,
-                 use_traversable=False, use_depth=True, use_label_prop=True):
+                 use_traversable=False, use_depth=True, use_label_prop=True, normalize=True):
         self.list_path = list_path
         self.pseudo_root = pseudo_root
         self.crop_h, self.crop_w = size
@@ -477,6 +503,7 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
         self.use_depth = use_depth
         self.use_traversable = use_traversable
         self.use_label_prop = use_label_prop
+        self.normalize = normalize
 
         self.images = []
         self.masks = []
@@ -518,15 +545,15 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
 #                RandomCrop(crop_size=(self.size[1], self.size[0])),
                 Resize(size=(self.size[1], self.size[0])),
                 RandomFlip(),
-                #Normalize()
-                Tensorize()
+                Normalize() if self.normalize else Tensorize()
+                #
             ]
         )
         val_transforms = Compose(
             [
                 Resize(size=self.size),
-                #Normalize()
-                Tensorize()
+                Normalize() if self.normalize else Tensorize()
+                #Tensorize()
             ]
         )
         return train_transforms, val_transforms
@@ -675,11 +702,12 @@ class GreenhouseRGBDStMineDataSet(data.Dataset):
 class GreenhouseRGBDConfidenceSegmentation(data.Dataset):
 
     def __init__(self, root=None, list_name=None, train=True, scale=(0.5, 2.0), size=(480, 256),
-                 use_depth=True, reg_weights=0.0, use_traversable=True, conf_root=None):
+                 use_depth=True, reg_weights=0.0, use_traversable=True, conf_root=None, normalize=True):
         self.train = train
         self.use_depth = use_depth
         self.reg_weight = reg_weights
         self.use_traversable = use_traversable
+        self.normalize = normalize
 #        if self.train:
         if root:
             data_file = os.path.join(root, list_name)
@@ -735,15 +763,13 @@ class GreenhouseRGBDConfidenceSegmentation(data.Dataset):
 #                RandomCrop(crop_size=self.size),
                 Resize(size=self.size),
                 RandomFlip(),
-                #Normalize()
-                Tensorize()
+                Normalize() if self.normalize else Tensorize()
             ]
         )
         val_transforms = Compose(
             [
                 Resize(size=self.size),
-                #Normalize()
-                Tensorize()
+                Normalize() if self.normalize else Tensorize()
             ]
         )
         return train_transforms, val_transforms
