@@ -1,13 +1,13 @@
 CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
-  --dataset camvid \
-  --data-path ./vision_datasets/camvid/ \
+  --dataset city \
+  --data-path ./vision_datasets/cityscapes/ \
   --savedir /tmp/runs/ \
-  --batch-size 24 \
-  --crop-size 480 288 \
+  --batch-size 12 \
+  --crop-size 512 256 \
   --ignore-idx 255 \
   --model espdnetue \
   --s 2.0 \
-  --lr 0.009 \
+  --lr 0.003 \
   --scheduler hybrid \
   --clr-max 61 \
   --normalize true \

@@ -54,10 +54,13 @@ CUDA_VISIBLE_DEVICES=0 python uest_seg.py \
     --runs-root /tmp/runs/uest \
     --epr 5 \
     --num-rounds 20 \
-    --use-uncertainty true \
-    --outsource camvid \
-    --outsource-weights /tmp/runs/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200630-161402/espdnet_2.0_480_best.pth
+    --use-uncertainty true
+#    --outsource camvid \
+#    --os-model espdnetue \
+#    --os-weights /tmp/runs/uest/model_espdnetue_greenhouse/s_2.0_res_480_uest_rgb_os_camvid_ue/20200702-010334/espdnetue_best.pth
 
+
+#    --outsource-weights /tmp/runs/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200630-161402/espdnet_2.0_480_best.pth
 # CE + NID
 #CUDA_VISIBLE_DEVICES=1 python uest_seg.py \
 #    --random-mirror \

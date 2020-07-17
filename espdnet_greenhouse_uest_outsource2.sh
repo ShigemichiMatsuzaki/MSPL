@@ -19,7 +19,7 @@ CUDA_VISIBLE_DEVICES=0 python uest_seg.py \
     --gpu 0 \
     --model espdnetue \
     --restore-from /tmp/runs/results_segmentation/model_espdnetue_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200523-200621/espdnetue_2.0_480_best.pth \
-    --runs-root /tmp/runs/results_segmentation/uest \
+    --runs-root /tmp/runs/uest \
     --power 0.0 \
     --epr 5 \
     --num-rounds 20 \

@@ -1,18 +1,17 @@
 CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
-  --dataset camvid \
-  --data-path ./vision_datasets/camvid/ \
+  --dataset city \
+  --data-path ./vision_datasets/cityscapes/ \
   --savedir /tmp/runs/ \
-  --batch-size 24 \
-  --crop-size 480 288 \
+  --batch-size 7 \
+  --crop-size 512 256 \
   --ignore-idx 255 \
-  --model espdnetue \
+  --model deeplabv3 \
   --s 2.0 \
-  --lr 0.009 \
+  --lr 0.0009 \
   --scheduler hybrid \
   --clr-max 61 \
-  --normalize true \
+  --use-aux true \
   --epochs 500
-  #--label-conversion true \
 
 # CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
 #   --dataset greenhouse \
