@@ -47,25 +47,25 @@ def main(args):
         val_dataset = CityscapesSegmentation(root=args.data_path, train=False, coarse=False)
         seg_classes = len(CITYSCAPE_CLASS_LIST)
         class_wts = torch.ones(seg_classes)
-        class_wts[0] = 2.8149201869965
-        class_wts[1] = 6.9850029945374
-        class_wts[2] = 3.7890393733978
-        class_wts[3] = 9.9428062438965
-        class_wts[4] = 9.7702074050903
-        class_wts[5] = 9.5110931396484
-        class_wts[6] = 10.311357498169
-        class_wts[7] = 10.026463508606
-        class_wts[8] = 4.6323022842407
-        class_wts[9] = 9.5608062744141
-        class_wts[10] = 7.8698215484619
-        class_wts[11] = 9.5168733596802
-        class_wts[12] = 10.373730659485
-        class_wts[13] = 6.6616044044495
-        class_wts[14] = 10.260489463806
-        class_wts[15] = 10.287888526917
-        class_wts[16] = 10.289801597595
-        class_wts[17] = 10.405355453491
-        class_wts[18] = 10.138095855713
+        class_wts[0] = 10 / 2.8149201869965
+        class_wts[1] = 10 / 6.9850029945374
+        class_wts[2] = 10 / 3.7890393733978
+        class_wts[3] = 10 / 9.9428062438965
+        class_wts[4] = 10 / 9.7702074050903
+        class_wts[5] = 10 / 9.5110931396484
+        class_wts[6] = 10 / 10.311357498169
+        class_wts[7] = 10 / 10.026463508606
+        class_wts[8] = 10 / 4.6323022842407
+        class_wts[9] = 10 / 9.5608062744141
+        class_wts[10] = 10 / 7.8698215484619
+        class_wts[11] = 10 / 9.5168733596802
+        class_wts[12] = 10 / 10.373730659485
+        class_wts[13] = 10 / 6.6616044044495
+        class_wts[14] = 10 / 10.260489463806
+        class_wts[15] = 10 / 10.287888526917
+        class_wts[16] = 10 / 10.289801597595
+        class_wts[17] = 10 / 10.405355453491
+        class_wts[18] = 10 / 10.138095855713
         class_wts[19] = 0.0
 
     elif args.dataset == 'greenhouse':
