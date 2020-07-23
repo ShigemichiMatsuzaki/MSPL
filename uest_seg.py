@@ -443,7 +443,7 @@ def main():
         print(class_weights)
         class_weights = torch.from_numpy(class_weights).float().to(device)
     elif args.outsource == 'cityscapes':
-        os_seg_classes = 19
+        os_seg_classes = 20
         if args.os_model == 'espdnet':
             from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
             tmp_args = copy.deepcopy(args)
@@ -451,7 +451,7 @@ def main():
             tmp_args.dense_fuse = False
             tmp_args.use_depth  = False
             tmp_args.classes = os_seg_classes
-            tmp_args.dataset = 'cityscapes'
+            tmp_args.dataset = 'city'
             tmp_args.weights = args.os_weights
 
             model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
@@ -462,7 +462,7 @@ def main():
             tmp_args.dense_fuse = False
             tmp_args.use_depth  = False
             tmp_args.classes = os_seg_classes
-            tmp_args.dataset = 'cityscapes'
+            tmp_args.dataset = 'city'
             tmp_args.weights = args.os_weights
            
             model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
@@ -474,7 +474,7 @@ def main():
             #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
             load_weights(model_outsource, args.os_weights)
 
-        class_weights = torch.ones(seg_classes)
+        class_weights = torch.ones(seg_classes).float().to(device)
         print(class_weights)
 
 
@@ -784,7 +784,7 @@ def val(model, device, save_path, round_idx,
                         output2 = output2['out'] + 0.5 * output2['aux']
                     else:
                         output2 = output2['out']
-                elif args.model == 'espdnetue':
+                elif args.os_model == 'espdnetue':
                     output2 = output2[0] + 0.5 * output2[1]
 
                 output = softmax2d(interp(output2)).cpu().data[0].numpy()
@@ -803,7 +803,7 @@ def val(model, device, save_path, round_idx,
                             output2 = output2['out'] + 0.5 * output2['aux']
                         else:
                             output2 = output2['out']
-                    elif args.model == 'espdnetue':
+                    elif args.os_model == 'espdnetue':
                         output2 = output2[0] + 0.5 * output2[1]
 
 
@@ -819,8 +819,6 @@ def val(model, device, save_path, round_idx,
                 output = output.transpose(1,2,0)
                 amax_output = np.asarray(np.argmax(output, axis=2), dtype=np.uint8)
                 conf = np.amax(output,axis=2) # amax : get a maximum value
-                # score
-                pred_label = amax_output.copy()
                 # label = label_2_id[np.asarray(label.numpy(), dtype=np.uint8)]
     
                 # save visualized seg maps & predication prob map
@@ -829,6 +827,8 @@ def val(model, device, save_path, round_idx,
                 elif outsource == 'cityscapes':
                     amax_output = id_cityscapes_to_greenhouse[amax_output]
 
+                # score
+                pred_label = amax_output.copy()
                 amax_output_col = colorize_mask(amax_output)
 
     #            label = label_2_id[np.asarray(label.numpy(), dtype=np.uint8)]
@@ -916,6 +916,10 @@ def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, ro
                         pred = interp(model(images))
                     elif args.model == 'espdnetue':
                         (pred, pred_aux) = interp(model(images))
+                    elif args.model == 'deeplabv3':
+                        output = model(images)
+                        pred = interp(output['out'])
+                        pred_aux = interp(output['aux'])
             else:
                 if args.use_depth:
                     if args.model == 'espdnet':
@@ -929,8 +933,8 @@ def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, ro
                         (pred, pred_aux) = model(images)
                     elif args.model == 'deeplabv3':
                         output = model(images)
-                        pred = output[0]
-                        pred_aux = output[1]
+                        pred = output['out']
+                        pred_aux = output['aux']
     
     #        print(pred.size())
             # Model regularizer
@@ -982,9 +986,12 @@ def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, ro
     
     # Before label conversion
     if args.use_depth: 
-        in_training_visualization_img(model, images, depths, labels.long(), class_encoding, writer, writer_idx, 'cbst_enet/train', device)
+        # model, images, depths=None, labels=None, predictions=None, class_encoding=None, writer=None, epoch=None, data=None, device=None
+        in_training_visualization_img(model, images=images, depths=depths, labels=labels.long(), class_encoding=class_encoding, 
+            writer=writer, epoch=writer_idx, data='cbst_enet/train', device=device)
     else:
-        in_training_visualization_img(model, images, None, labels.long(), class_encoding, writer, writer_idx, 'cbst_enet/train', device)
+        in_training_visualization_img(model, images=images, labels=labels.long(), class_encoding=class_encoding, 
+            writer=writer, epoch=writer_idx, data='cbst_enet/train', device=device)
 
     
     writer_idx += 1
@@ -1082,6 +1089,10 @@ def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
                         pred = interp(model(images))
                     elif args.model == 'espdnetue':
                         (pred, pred_aux) = interp(model(images))
+                    elif args.model == 'deeplabv3':
+                        output = model(images)
+                        pred = interp(output['out'])
+                        pred_aux = interp(output['aux'])
             else:
                 if args.use_depth:
                     if args.model == 'espdnet':
@@ -1095,8 +1106,8 @@ def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
                         (pred, pred_aux) = model(images)
                     elif args.model == 'deeplabv3':
                         output = model(images)
-                        pred = output[0]
-                        pred_aux = output[1]
+                        pred = output['out']
+                        pred_aux = output['aux']
 
             loss = criterion(pred, labels) # torch.max returns a tuple of (maxvalues, indices)
 
@@ -1193,9 +1204,12 @@ def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
 #    if args.dataset == 'greenhouse':
 #        # TODO: Check
     if args.use_depth:
-        in_training_visualization_img(model, images, depths, labels, class_encoding, writer, round_idx, 'cbst_enet/test', device)
+        # model, images, depths=None, labels=None, predictions=None, class_encoding=None, writer=None, epoch=None, data=None, device=None
+        in_training_visualization_img(model, images=images, depths=depths, labels=labels, 
+            class_encoding=class_encoding, writer=writer, epoch=round_idx, data='cbst_enet/test', device=device)
     else:
-        in_training_visualization_img(model, images, None, labels, class_encoding, writer, round_idx, 'cbst_enet/test', device)
+        in_training_visualization_img(model, images=images, labels=labels, class_encoding=class_encoding,
+            writer=writer, epoch=round_idx, data='cbst_enet/test', device=device)
 
     return miou
 
