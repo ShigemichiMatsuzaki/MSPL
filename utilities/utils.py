@@ -72,15 +72,16 @@ def compute_flops(model, input=None):
     flops = flops / 1e6 / 2
     return flops
 
-def in_training_visualization_img(model, images, depths=None, labels=None, class_encoding=None, writer=None, epoch=None, data=None, device=None):
+def in_training_visualization_img(model, images, depths=None, labels=None, predictions=None, class_encoding=None, writer=None, epoch=None, data=None, device=None):
     # Make predictions!
-    model.eval()
-    with torch.no_grad():
-        if depths is not None:
-            print("Eval. depths:{}".format(depths.size()))
-            predictions = model(images, depths)
-        else:
-            predictions = model(images)
+    if predictions is None:
+        model.eval()
+        with torch.no_grad():
+            if depths is not None:
+                print("Eval. depths:{}".format(depths.size()))
+                predictions = model(images, depths)
+            else:
+                predictions = model(images)
     
     # Predictions is one-hot encoded with "num_classes" channels.
     # Convert it to a single int using the indices where the maximum (1) occurs
@@ -105,10 +106,16 @@ def in_training_visualization_img(model, images, depths=None, labels=None, class
             writer.add_image(data + '/kld', kld, epoch)
 
         _, predictions = torch.max(f_pred, dim=1)       
+    elif len(predictions.size()) == 3:
+        pass
     else:
         _, predictions = torch.max(predictions.data, dim=1)
+
+
+    print(predictions.size())
+    print(labels.size())
     
-       # label_to_rgb : Sequence of processes
+    # label_to_rgb : Sequence of processes
     #  1. LongTensorToRGBPIL(tensor) -> PIL Image : Convert label tensor to color map
     #  2. transforms.ToTensor() -> Tensor : Convert PIL Image to a tensor
     label_to_rgb = transforms.Compose([
@@ -118,7 +125,7 @@ def in_training_visualization_img(model, images, depths=None, labels=None, class
 
     # Do transformation of label tensor and prediction tensor
     color_train       = batch_transform(labels.data.cpu(), label_to_rgb)
-    color_predictions = batch_transform(predictions.cpu(), label_to_rgb)
+    color_predictions = batch_transform(predictions.data.cpu(), label_to_rgb)
 
     write_summary_batch(images.data.cpu(), color_train, color_predictions, writer, epoch, data)
 
