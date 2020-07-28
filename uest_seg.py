@@ -776,6 +776,8 @@ def val(model, device, save_path, round_idx,
                 # if args.model == 'ENet':
                 if not args.use_depth: #or outsource == 'camvid':
                     output2 = model(image.to(device))
+                    import copy
+                    output_disp = copy.deepcopy(output2)
                 else:
                     output2 = model(image.to(device), depth.to(device))
 
@@ -848,6 +850,16 @@ def val(model, device, save_path, round_idx,
                 label_path_list.append('%s/%s.png' % (save_pred_path, image_name)) 
                 if args.use_depth:
                     depth_path_list.append(path_name.replace('color', 'depth'))
+
+                if args.use_depth:
+                    depth = batch[2].to(device)
+                    in_training_visualization_img(
+                        model, images=image, depths=depth, labels=label, 
+                        class_encoding=class_encoding, writer=writer, epoch=round_idx, data='cbst_enet/val', device=device)
+#                else:
+#                    in_training_visualization_img(
+#                        model, images=image, labels=label, predictions=output_disp,
+#                        class_encoding=class_encoding, writer=writer, epoch=round_idx, data='cbst_enet/val', device=device)
         
         pbar.close()
 
@@ -858,14 +870,10 @@ def val(model, device, save_path, round_idx,
             else:
                 f.write("%s,%s\n" % (image_path_list[idx], label_path_list[idx]))
 
-    batch = iter(testloader).next()
-    image = batch[0].to(device)
-    label = batch[1].long()
-    if args.use_depth:
-        depth = batch[2].to(device)
-        in_training_visualization_img(
-            model, images=image, depths=depth, labels=label,
-            class_encoding=class_encoding, writer=writer, epoch=round_idx, data='cbst_enet/val', device=device)
+#    batch = iter(testloader).next()
+#    image = batch[0].to(device)
+#    label = batch[1].long()
+
 
 #    if args.dataset != 'greenhouse':
 #        label = label_2_id[label.cpu().numpy()]
