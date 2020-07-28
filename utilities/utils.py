@@ -112,9 +112,6 @@ def in_training_visualization_img(model, images, depths=None, labels=None, predi
         _, predictions = torch.max(predictions.data, dim=1)
 
 
-    print(predictions.size())
-    print(labels.size())
-    
     # label_to_rgb : Sequence of processes
     #  1. LongTensorToRGBPIL(tensor) -> PIL Image : Convert label tensor to color map
     #  2. transforms.ToTensor() -> Tensor : Convert PIL Image to a tensor
