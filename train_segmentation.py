@@ -161,6 +161,22 @@ def main(args):
             print("class weights : {}".format(class_wts))
 
         args.use_depth = False
+    elif args.dataset == 'forest':
+        from data_loader.segmentation.freiburg_forest import FreiburgForestDataset, FOREST_CLASS_LIST, color_encoding
+        train_dataset = FreiburgForestDataset(
+            train=True, size=crop_size, scale=args.scale, normalize=args.normalize)
+        val_dataset = FreiburgForestDataset(
+            train=False, size=crop_size, scale=args.scale, normalize=args.normalize)
+
+        seg_classes = len(FOREST_CLASS_LIST)
+        tmp_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False)
+
+        class_wts = calc_cls_class_weight(tmp_loader, seg_classes, inverted=True)
+        class_wts = torch.from_numpy(class_wts).float().to(device)
+#        class_wts = torch.ones(seg_classes)
+        print("class weights : {}".format(class_wts))
+
+        args.use_depth = False
     else:
         print_error_message('Dataset: {} not yet supported'.format(args.dataset))
         exit(-1)
@@ -192,6 +208,11 @@ def main(args):
         # model = DeepLabV3(seg_classes)
         model = deeplabv3_resnet101(num_classes=seg_classes, aux_loss=True)
         torch.backends.cudnn.enabled = False
+    elif args.model == 'unet':
+        from model.segmentation.unet import UNet
+        model = UNet(in_channels=3, out_channels=seg_classes)
+#        model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
+#            in_channels=3, out_channels=seg_classes, init_features=32, pretrained=False)
 
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
@@ -217,7 +238,7 @@ def main(args):
                 m.weight.requires_grad = False
                 m.bias.requires_grad = False
 
-    if args.model == 'deeplabv3':
+    if args.model == 'deeplabv3' or args.model == 'unet':
         train_params = [{'params': model.parameters(), 'lr': args.lr}]
 
     elif args.use_depth:
@@ -343,7 +364,7 @@ def main(args):
         print_info_message(
             'Running epoch {} with learning rates: base_net {:.6f}, segment_net {:.6f}'.format(epoch, lr_base, lr_seg))
 
-        if args.model == 'espdnetue' or (args.model == 'deeplabv3' and args.use_aux):
+        if args.model == 'espdnetue' or ((args.model == 'deeplabv3' or args.model == 'unet') and args.use_aux):
             from utilities.train_eval_seg import train_seg_ue as train
             from utilities.train_eval_seg import val_seg_ue as val
         else:
@@ -515,7 +536,9 @@ if __name__ == "__main__":
     elif args.dataset == 'sun':
         args.scale = (0.5, 2.0)
     elif args.dataset == 'camvid':
-        args.scale = (0.5, 2.0)
+        args.scale = (1.0, 1.0)
+    elif args.dataset == 'forest':
+        args.scale = (1.0, 1.0)
     else:
         print_error_message('{} dataset not yet supported'.format(args.dataset))
 
@@ -526,7 +549,7 @@ if __name__ == "__main__":
             weight_file_key = '{}_{}'.format('espnetv2', args.s)
             assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)
             args.weights = model_weight_map[weight_file_key]
-        elif args.model == 'deeplabv3':
+        elif args.model == 'deeplabv3' or args.model == 'unet':
             args.weights  = ''
 
     #        if args.use_depth:

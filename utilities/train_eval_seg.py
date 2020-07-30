@@ -52,7 +52,7 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
             if add_criterion is not None:
                 loss2 = add_criterion(inputs, outputs) * weight
                 loss += loss2
-
+            
         inter, union = miou_class.get_iou(outputs, target)
 
         inter_meter.update(inter)
@@ -182,7 +182,7 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
 
         kld = kld_layer(outputs, out_aux)
         outputs = outputs + 0.5*out_aux
-        
+
         if device == 'cuda':
 #            print("Target size {}".format(target.size()))
 #
