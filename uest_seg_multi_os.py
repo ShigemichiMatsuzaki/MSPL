@@ -30,7 +30,7 @@ import numpy as np
 import shutil
 import random
 
-from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, set_logger, calc_cls_class_weight
+from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, set_logger, calc_cls_class_weight, import_os_model
 from utilities.utils import AverageMeter
 from utilities.metrics.segmentation_miou import MIOU
 from utilities.train_eval_seg import train_seg as train
@@ -321,39 +321,39 @@ def colorize_mask(mask):
     new_mask.putpalette(palette)
     return new_mask
 
-def import_os_model(args, os_model, os_weights, os_seg_classes):
-    print("import_os_model : {}".format(os_weights))
-    # Import model
-    if os_model == 'espdnet':
-        from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
-        tmp_args = copy.deepcopy(args)
-        tmp_args.trainable_fusion = False
-        tmp_args.dense_fuse = False
-        tmp_args.use_depth  = False
-        tmp_args.classes = os_seg_classes
-        tmp_args.dataset = 'camvid'
-        tmp_args.weights = os_weights
-        model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
-    elif os_model == 'espdnetue':
-        from model.segmentation.espdnet_ue import espdnetue_seg2
-        tmp_args = copy.deepcopy(args)
-        tmp_args.trainable_fusion = False
-        tmp_args.dense_fuse = False
-        tmp_args.use_depth  = False
-        tmp_args.classes = os_seg_classes
-        tmp_args.dataset = 'camvid'
-        tmp_args.weights = os_weights
-       
-        model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
-    elif os_model == 'deeplabv3':
-        from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
-
-        model_outsource = deeplabv3_resnet101(num_classes=os_seg_classes, aux_loss=True)
-        # Import pre-trained weights
-        #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
-        load_weights(model_outsource, os_weights)
-
-    return model_outsource
+#def import_os_model(args, os_model, os_weights, os_seg_classes):
+#    print("import_os_model : {}".format(os_weights))
+#    # Import model
+#    if os_model == 'espdnet':
+#        from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
+#        tmp_args = copy.deepcopy(args)
+#        tmp_args.trainable_fusion = False
+#        tmp_args.dense_fuse = False
+#        tmp_args.use_depth  = False
+#        tmp_args.classes = os_seg_classes
+#        tmp_args.dataset = 'camvid'
+#        tmp_args.weights = os_weights
+#        model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+#    elif os_model == 'espdnetue':
+#        from model.segmentation.espdnet_ue import espdnetue_seg2
+#        tmp_args = copy.deepcopy(args)
+#        tmp_args.trainable_fusion = False
+#        tmp_args.dense_fuse = False
+#        tmp_args.use_depth  = False
+#        tmp_args.classes = os_seg_classes
+#        tmp_args.dataset = 'camvid'
+#        tmp_args.weights = os_weights
+#       
+#        model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
+#    elif os_model == 'deeplabv3':
+#        from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
+#
+#        model_outsource = deeplabv3_resnet101(num_classes=os_seg_classes, aux_loss=True)
+#        # Import pre-trained weights
+#        #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
+#        load_weights(model_outsource, os_weights)
+#
+#    return model_outsource
 
 def main():
     randseed = args.randseed
@@ -442,8 +442,8 @@ def main():
         model = deeplabv3_resnet101(num_classes=seg_classes, aux_loss=True)
 
     # Outsource
-    os_model1 = import_os_model(args, os_model=args.os_model1, os_weights=args.os_weights1, os_seg_classes=13)
-    os_model2 = import_os_model(args, os_model=args.os_model2, os_weights=args.os_weights2, os_seg_classes=20)
+    os_model1 = import_os_model(args, os_model=args.os_model1, os_weights=args.os_weights1, os_seg_classes=13 if args.outsource1 == 'camvid' else 20)
+    os_model2 = import_os_model(args, os_model=args.os_model2, os_weights=args.os_weights2, os_seg_classes=13 if args.outsource2 == 'camvid' else 20)
 
     class_weights = torch.ones(seg_classes).float().to(device)
     print(class_weights)
@@ -953,8 +953,15 @@ def generate_pseudo_label_multi_model(model1, model2, device, save_path, round_i
                 amax_output2 = np.asarray(np.argmax(output2, axis=2), dtype=np.uint8)
 
                 # save visualized seg maps & predication prob map
-                amax_output1 = id_camvid_to_greenhouse[amax_output1]
-                amax_output2 = id_cityscapes_to_greenhouse[amax_output2]
+                if args.outsource1 == 'camvid':
+                    amax_output1 = id_camvid_to_greenhouse[amax_output1]
+                else:
+                    amax_output1 = id_cityscapes_to_greenhouse[amax_output1]
+
+                if args.outsource2 == 'camvid':
+                    amax_output2 = id_camvid_to_greenhouse[amax_output2]
+                else:
+                    amax_output2 = id_cityscapes_to_greenhouse[amax_output2]
 
                 amax_output, kld = merge_outputs(amax_output1, amax_output2, kld1, kld2)
 

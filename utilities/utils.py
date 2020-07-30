@@ -8,6 +8,7 @@ import torchvision.transforms as transforms
 from collections import OrderedDict
 import logging
 from loss_fns.segmentation_loss import PixelwiseKLD
+import copy
 
 #============================================
 __author__ = "Sachin Mehta"
@@ -268,3 +269,39 @@ def set_logger(output_dir=None, log_file=None, debug=False):
         logger = logging.getLogger()
     return logger
 
+def import_os_model(args, os_model, os_weights, os_seg_classes):
+    print("import_os_model : {}".format(os_weights))
+    # Import model
+    if os_model == 'espdnet':
+        from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
+        tmp_args = copy.deepcopy(args)
+        tmp_args.trainable_fusion = False
+        tmp_args.dense_fuse = False
+        tmp_args.use_depth  = False
+        tmp_args.classes = os_seg_classes
+        tmp_args.dataset = 'camvid'
+        tmp_args.weights = os_weights
+        model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+    elif os_model == 'espdnetue':
+        from model.segmentation.espdnet_ue import espdnetue_seg2
+        tmp_args = copy.deepcopy(args)
+        tmp_args.trainable_fusion = False
+        tmp_args.dense_fuse = False
+        tmp_args.use_depth  = False
+        tmp_args.classes = os_seg_classes
+        tmp_args.dataset = 'camvid'
+        tmp_args.weights = os_weights
+       
+        model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
+    elif os_model == 'deeplabv3':
+        from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
+
+        model_outsource = deeplabv3_resnet101(num_classes=os_seg_classes, aux_loss=True)
+        # Import pre-trained weights
+        #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
+        load_weights(model_outsource, os_weights)
+    elif os_model == 'unet':
+        from model.segmentation.unet import unet_seg
+        model_outsource = unet_seg(num_classes=os_seg_classes, weights=os_weights)
+
+    return model_outsource
