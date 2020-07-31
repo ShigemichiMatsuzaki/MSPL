@@ -30,7 +30,7 @@ import numpy as np
 import shutil
 import random
 
-from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, set_logger, calc_cls_class_weight
+from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, set_logger, calc_cls_class_weight, import_os_model
 from utilities.utils import AverageMeter
 from utilities.metrics.segmentation_miou import MIOU
 from utilities.train_eval_seg import train_seg as train
@@ -48,6 +48,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from data_loader.segmentation.greenhouse import id_camvid_to_greenhouse
 from data_loader.segmentation.greenhouse import id_cityscapes_to_greenhouse
+from data_loader.segmentation.greenhouse import id_forest_to_greenhouse
 
 ### shared ###
 IMG_MEAN = np.array((0.406, 0.456, 0.485), dtype=np.float32) # BGR
@@ -397,40 +398,46 @@ def main():
     elif args.model == 'deeplabv3':
         from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
         model = deeplabv3_resnet101(num_classes=seg_classes, aux_loss=True)
+    elif args.model == 'unet':
+        from model.segmentation.unet import unet_seg
+        model = unet_seg(num_classes=seg_classes, weights=args.weights)
 
     # Outsource
     # Import pretrained model trained for giving initial pseudo-labels
     if args.outsource == 'camvid':
         os_seg_classes = 13
         # Import model
-        if args.os_model == 'espdnet':
-            from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
-            tmp_args = copy.deepcopy(args)
-            tmp_args.trainable_fusion = False
-            tmp_args.dense_fuse = False
-            tmp_args.use_depth  = False
-            tmp_args.classes = os_seg_classes
-            tmp_args.dataset = 'camvid'
-            tmp_args.weights = args.os_weights
-            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
-        elif args.os_model == 'espdnetue':
-            from model.segmentation.espdnet_ue import espdnetue_seg2
-            tmp_args = copy.deepcopy(args)
-            tmp_args.trainable_fusion = False
-            tmp_args.dense_fuse = False
-            tmp_args.use_depth  = False
-            tmp_args.classes = os_seg_classes
-            tmp_args.dataset = 'camvid'
-            tmp_args.weights = args.os_weights
-           
-            model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
-        elif args.os_model == 'deeplabv3':
-            from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
 
-            model_outsource = deeplabv3_resnet101(num_classes=os_seg_classes, aux_loss=True)
-            # Import pre-trained weights
-            #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
-            load_weights(model_outsource, args.os_weights)
+        model_outsource = import_os_model(args, os_model=args.os_model, os_weights=args.os_weights, os_seg_classes=os_seg_classes)
+
+#        if args.os_model == 'espdnet':
+#            from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
+#            tmp_args = copy.deepcopy(args)
+#            tmp_args.trainable_fusion = False
+#            tmp_args.dense_fuse = False
+#            tmp_args.use_depth  = False
+#            tmp_args.classes = os_seg_classes
+#            tmp_args.dataset = 'camvid'
+#            tmp_args.weights = args.os_weights
+#            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+#        elif args.os_model == 'espdnetue':
+#            from model.segmentation.espdnet_ue import espdnetue_seg2
+#            tmp_args = copy.deepcopy(args)
+#            tmp_args.trainable_fusion = False
+#            tmp_args.dense_fuse = False
+#            tmp_args.use_depth  = False
+#            tmp_args.classes = os_seg_classes
+#            tmp_args.dataset = 'camvid'
+#            tmp_args.weights = args.os_weights
+#           
+#            model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
+#        elif args.os_model == 'deeplabv3':
+#            from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
+#
+#            model_outsource = deeplabv3_resnet101(num_classes=os_seg_classes, aux_loss=True)
+#            # Import pre-trained weights
+#            #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
+#            load_weights(model_outsource, args.os_weights)
 
         # Calculate class weights from the outsource dataset
         from data_loader.segmentation.camvid import CamVidSegmentation
@@ -444,39 +451,16 @@ def main():
         class_weights = torch.from_numpy(class_weights).float().to(device)
     elif args.outsource == 'cityscapes':
         os_seg_classes = 20
-        if args.os_model == 'espdnet':
-            from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
-            tmp_args = copy.deepcopy(args)
-            tmp_args.trainable_fusion = False
-            tmp_args.dense_fuse = False
-            tmp_args.use_depth  = False
-            tmp_args.classes = os_seg_classes
-            tmp_args.dataset = 'city'
-            tmp_args.weights = args.os_weights
-
-            model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
-        elif args.os_model == 'espdnetue':
-            from model.segmentation.espdnet_ue import espdnetue_seg2
-            tmp_args = copy.deepcopy(args)
-            tmp_args.trainable_fusion = False
-            tmp_args.dense_fuse = False
-            tmp_args.use_depth  = False
-            tmp_args.classes = os_seg_classes
-            tmp_args.dataset = 'city'
-            tmp_args.weights = args.os_weights
-           
-            model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
-
-        elif args.os_model == 'deeplabv3':
-            from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
-            model_outsource = deeplabv3_resnet101(num_classes=os_seg_classes, aux_loss=True)
-            # Import pre-trained weights
-            #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
-            load_weights(model_outsource, args.os_weights)
+        model_outsource = import_os_model(args, os_model=args.os_model, os_weights=args.os_weights, os_seg_classes=os_seg_classes)
 
         class_weights = torch.ones(seg_classes).float().to(device)
         print(class_weights)
+    elif args.outsource == 'forest':
+        os_seg_classes = 5
+        model_outsource = import_os_model(args, os_model=args.os_model, os_weights=args.os_weights, os_seg_classes=os_seg_classes)
 
+        class_weights = torch.ones(seg_classes).float().to(device)
+        print(class_weights)
 
     print("Model {} is load successfully!".format(args.restore_from))
 
@@ -560,7 +544,6 @@ def main():
         tgt_train_lst = val(model, device, save_path, 
                             0, tgt_num, label_2_id, valid_labels,
                             args, logger, class_encoding, writer)
-
     best_miou = 0.0
     for round_idx in range(args.num_rounds):
 
@@ -786,7 +769,9 @@ def val(model, device, save_path, round_idx,
                         output2 = output2['out'] + 0.5 * output2['aux']
                     else:
                         output2 = output2['out']
-                elif args.os_model == 'espdnetue':
+                #elif args.os_model == 'espdnetue':
+                elif isinstance(output2, tuple):
+
                     output2 = output2[0] + 0.5 * output2[1]
 
                 output = softmax2d(interp(output2)).cpu().data[0].numpy()
@@ -805,18 +790,13 @@ def val(model, device, save_path, round_idx,
                             output2 = output2['out'] + 0.5 * output2['aux']
                         else:
                             output2 = output2['out']
-                    elif args.os_model == 'espdnetue':
+                    #elif args.os_model == 'espdnetue':
+                    elif isinstance(output2, tuple):
+
                         output2 = output2[0] + 0.5 * output2[1]
 
 
                     output = 0.5 * ( output + softmax2d(interp(output2)).cpu().data[0].numpy()[:,:,::-1] )
-
-                # If the label is transfered from an external dataset,
-                #   convert the output tensor (numpy)
-#                if outsource == 'camvid':
-#                    output = transfer_output_to_greenhouse(id_camvid_to_greenhouse, output)
-#                elif outsource == 'cityscapes':
-#                    output = transfer_output_to_greenhouse(id_cityscapes_to_greenhouse, output)
 
                 output = output.transpose(1,2,0)
                 amax_output = np.asarray(np.argmax(output, axis=2), dtype=np.uint8)
@@ -828,6 +808,8 @@ def val(model, device, save_path, round_idx,
                     amax_output = id_camvid_to_greenhouse[amax_output]
                 elif outsource == 'cityscapes':
                     amax_output = id_cityscapes_to_greenhouse[amax_output]
+                elif outsource == 'forest':
+                    amax_output = id_forest_to_greenhouse[amax_output]
 
                 # score
                 pred_label = amax_output.copy()
@@ -922,7 +904,7 @@ def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, ro
                 else:
                     if args.model == 'espdnet':
                         pred = interp(model(images))
-                    elif args.model == 'espdnetue':
+                    elif args.model == 'espdnetue' or args.model == 'unet':
                         (pred, pred_aux) = interp(model(images))
                     elif args.model == 'deeplabv3':
                         output = model(images)
@@ -932,12 +914,12 @@ def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, ro
                 if args.use_depth:
                     if args.model == 'espdnet':
                         pred = model(images, depths)
-                    elif args.model == 'espdnetue':
+                    elif args.model == 'espdnetue' or args.model == 'unet':
                         (pred, pred_aux) = model(images, depths)
                 else:
                     if args.model == 'espdnet':
                         pred = model(images)
-                    elif args.model == 'espdnetue':
+                    elif args.model == 'espdnetue' or args.model == 'unet':
                         (pred, pred_aux) = model(images)
                     elif args.model == 'deeplabv3':
                         output = model(images)
@@ -1090,12 +1072,12 @@ def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
                 if args.use_depth:
                     if args.model == 'espdnet':
                         pred = interp(model(images, depths))
-                    elif args.model == 'espdnetue':
+                    elif args.model == 'espdnetue' or args.model == 'unet':
                         (pred, pred_aux) = interp(model(images, depths))
                 else:
                     if args.model == 'espdnet':
                         pred = interp(model(images))
-                    elif args.model == 'espdnetue':
+                    elif args.model == 'espdnetue' or args.model == 'unet':
                         (pred, pred_aux) = interp(model(images))
                     elif args.model == 'deeplabv3':
                         output = model(images)
@@ -1105,12 +1087,12 @@ def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
                 if args.use_depth:
                     if args.model == 'espdnet':
                         pred = model(images, depths)
-                    elif args.model == 'espdnetue':
+                    elif args.model == 'espdnetue' or args.model == 'unet':
                         (pred, pred_aux) = model(images, depths)
                 else:
                     if args.model == 'espdnet':
                         pred = model(images)
-                    elif args.model == 'espdnetue':
+                    elif args.model == 'espdnetue' or args.model == 'unet':
                         (pred, pred_aux) = model(images)
                     elif args.model == 'deeplabv3':
                         output = model(images)
