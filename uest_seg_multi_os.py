@@ -48,6 +48,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from data_loader.segmentation.greenhouse import id_camvid_to_greenhouse
 from data_loader.segmentation.greenhouse import id_cityscapes_to_greenhouse
+from data_loader.segmentation.greenhouse import id_forest_to_greenhouse
 
 ### shared ###
 IMG_MEAN = np.array((0.406, 0.456, 0.485), dtype=np.float32) # BGR
@@ -282,9 +283,15 @@ def get_arguments():
                         help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
     parser.add_argument("--outsource2", type=str, default=None, dest='outsource2',
                         help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
-    parser.add_argument("--os-model2", type=str, default="espdnet", dest='os_model2',
+    parser.add_argument("--os-model2", type=str, default=None, dest='os_model2',
                         help="Model for generating pseudo-labels")
-    parser.add_argument("--os-weights2", type=str, default='./results_segmentation/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb_/20200420-095339/espdnet_2.0_480_best.pth', dest='os_weights2',
+    parser.add_argument("--os-weights2", type=str, default=None, dest='os_weights2',
+                        help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
+    parser.add_argument("--outsource3", type=str, default=None, dest='outsource3',
+                        help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
+    parser.add_argument("--os-model3", type=str, default=None, dest='os_model3',
+                        help="Model for generating pseudo-labels")
+    parser.add_argument("--os-weights3", type=str, default=None, dest='os_weights3',
                         help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
 
     parser.add_argument("--use-traversable", type=str, default=False, dest='use_traversable',
@@ -298,6 +305,7 @@ def get_arguments():
                         help="Whether to remove label images etc. after the training")
     parser.add_argument('--conservative-label', default=False, type=bool,
                         help='Only use labels that two models agree')
+    parser.add_argument('--label-update', default=-1, type=int, help='Update pseudo-label after the specified step')
 
     return parser.parse_args()
 
@@ -373,7 +381,8 @@ def main():
     else:
         trainable_fusion_str = ""
 
-    outsource_str = "_os_" + args.outsource1 + "_" + args.outsource2 
+    outsource_str = "_os_" +  args.outsource1 + ("_" + args.outsource2 if args.outsource2 is not None else "") \
+        + ("_" + args.outsource3 if args.outsource3 is not None else "")
     ue_str   = "_ue" if args.use_uncertainty else ""
     loss_str = "_nid_{}".format(args.nid_bin) if args.use_nid else ""
 
@@ -442,8 +451,28 @@ def main():
         model = deeplabv3_resnet101(num_classes=seg_classes, aux_loss=True)
 
     # Outsource
-    os_model1 = import_os_model(args, os_model=args.os_model1, os_weights=args.os_weights1, os_seg_classes=13 if args.outsource1 == 'camvid' else 20)
-    os_model2 = import_os_model(args, os_model=args.os_model2, os_weights=args.os_weights2, os_seg_classes=13 if args.outsource2 == 'camvid' else 20)
+    os_model_name_list = [args.os_model1, args.os_model2, args.os_model3]
+    os_weights_name_list = [args.os_weights1, args.os_weights2, args.os_weights3]
+    os_data_name_list = [args.outsource1, args.outsource2, args.outsource3]
+    os_model_name_list = [x for x in os_model_name_list if x is not None]
+    os_weights_name_list = [x for x in os_weights_name_list if x is not None] 
+    os_data_name_list = [x for x in os_data_name_list if x is not None]
+    os_model_list = []
+    print(os_model_name_list)
+    print(os_weights_name_list)
+    print(os_data_name_list)
+    for os_m, os_w, os_d in zip(os_model_name_list, os_weights_name_list, os_data_name_list):
+        if os_d == 'camvid':
+            os_seg_classes = 13
+        elif os_d == 'cityscapes':
+            os_seg_classes = 20
+        elif os_d == 'forest':
+            os_seg_classes = 5
+
+        os_model = import_os_model(args, os_model=os_m, os_weights=os_w, os_seg_classes=os_seg_classes)
+        os_model_list.append(os_model)
+
+#        os_model2 = import_os_model(args, os_model=args.os_model2, os_weights=args.os_weights2, os_seg_classes=13 if args.outsource2 == 'camvid' else 20)
 
     class_weights = torch.ones(seg_classes).float().to(device)
     print(class_weights)
@@ -533,9 +562,10 @@ def main():
     best_miou = 0.0
     for round_idx in range(args.num_rounds):
         if round_idx == 0:
-            tgt_train_lst = generate_pseudo_label_multi_model(os_model1, os_model2, device, save_path, round_idx, 
+#            tgt_train_lst = generate_pseudo_label_multi_model(os_model1, os_model2, device, save_path, round_idx, 
+            tgt_train_lst = generate_pseudo_label_multi_model(os_model_list, os_data_name_list, device, save_path, round_idx, 
                 tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer)
-        elif round_idx > 3:
+        elif round_idx >= args.label_update and args.label_update >= 0:
             tgt_train_lst = generate_pseudo_label(model, device, save_path, round_idx, 
                 tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer)
 
@@ -753,7 +783,7 @@ def get_output(model, image, model_name='espdnetue', device='cuda'):
 
     return output, kld
 
-def merge_outputs(amax_output1, amax_output2, kld1, kld2):
+def merge_outputs_old(amax_output1, amax_output2, kld1, kld2):
 #    print(amax_output1.size, kld1.size)
 #    print(amax_output2.size, kld2.size)
     amax_merge = amax_output1.copy()
@@ -768,6 +798,30 @@ def merge_outputs(amax_output1, amax_output2, kld1, kld2):
 #    print("{} % of the labels are from kld2".format(port))
 
     return amax_merge, kld_merge
+
+def merge_outputs(amax_outputs, seg_classes, thresh=None):
+    # If not specified, the label with votes more than half of the number of the outputs is selected
+    if thresh is None:
+        thresh = amax_outputs.shape[0] // 2 + 1
+    
+    # Convert the tuple of ndarrays to an ndarray
+    # If there is only one data, explicitly reshape the array
+#    amax_outputs = np.array(amax_outputs)
+#    if len(amax_outputs.shape) == 2:
+#        amax_outputs = amax_outputs.reshape(1, amax_outputs.shape[0], amax_outputs.shape[1])
+
+    counts_lst = []
+    for class_id in range(args.classes):
+        # Count the number of data with class 'class_id' on each pixel
+        count = (amax_outputs == class_id).sum(axis=0)
+        counts_lst.append(count)
+
+    counts_np = np.array(counts_lst)
+    count_amax = counts_np.argmax(axis=0)
+    count_max  = counts_np.max(axis=0)
+    count_amax[count_max < thresh] = 4
+
+    return count_amax
 
 def update_image_list(tgt_train_lst, image_path_list, label_path_list, depth_path_list=None):
     with open(tgt_train_lst, 'w') as f:
@@ -879,7 +933,8 @@ def generate_pseudo_label(model, device, save_path, round_idx,
     return tgt_train_lst
 
 """Create the model and start the evaluation process."""
-def generate_pseudo_label_multi_model(model1, model2, device, save_path, round_idx, 
+#def generate_pseudo_label_multi_model(model1, model2, device, save_path, round_idx, 
+def generate_pseudo_label_multi_model(model_list, os_data_list, device, save_path, round_idx, 
         tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer):
     ## scorer
     scorer = ScoreUpdater(valid_labels, args.num_classes_seg, tgt_num, logger)
@@ -897,17 +952,6 @@ def generate_pseudo_label_multi_model(model1, model2, device, save_path, round_i
 #        testloader = data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
 
     testloader = data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
-
-    ## model for evaluation
-    if args.eval_training:
-        model1.train()
-        model2.train()
-    else:
-        model1.eval()
-        model2.eval()
-    #
-    model1.to(device)
-    model2.to(device)
 
     ## upsampling layer
     if version.parse(torch.__version__) >= version.parse('0.4.0'):
@@ -928,6 +972,17 @@ def generate_pseudo_label_multi_model(model1, model2, device, save_path, round_i
     conf_dict = {k: [] for k in range(args.num_classes_seg)}
     pred_cls_num = np.zeros(args.num_classes_seg)
 
+    ## model for evaluation
+    if args.eval_training:
+        for m in model_list:
+            m.train()
+    else:
+        for m in model_list:
+            m.eval()
+    #
+    for m in model_list:
+        m.to(device)
+
     ## evaluation process
     logger.info('###### Start evaluating target domain train set in round {}! ######'.format(round_idx))
     start_eval = time.time()
@@ -943,27 +998,34 @@ def generate_pseudo_label_multi_model(model1, model2, device, save_path, round_i
                 else:
                     image, label, name, _ = batch
 
-                # Output: Numpy, KLD: Numpy
-                output1, kld1 = get_output(model1, image) 
-                output2, kld2 = get_output(model2, image)
+                output_list = []
+                for m, os_data in zip(model_list, os_data_list):
+                    # Output: Numpy, KLD: Numpy
+                    output, _ = get_output(m, image) 
+    #                output2, _ = get_output(model2, image)
 
-                output1 = output1.transpose(1,2,0)
-                output2 = output2.transpose(1,2,0)
-                amax_output1 = np.asarray(np.argmax(output1, axis=2), dtype=np.uint8)
-                amax_output2 = np.asarray(np.argmax(output2, axis=2), dtype=np.uint8)
+                    output = output.transpose(1,2,0)
+    #                output2 = output2.transpose(1,2,0)
+                    amax_output = np.asarray(np.argmax(output, axis=2), dtype=np.uint8)
+    #                amax_output2 = np.asarray(np.argmax(output2, axis=2), dtype=np.uint8)
 
-                # save visualized seg maps & predication prob map
-                if args.outsource1 == 'camvid':
-                    amax_output1 = id_camvid_to_greenhouse[amax_output1]
-                else:
-                    amax_output1 = id_cityscapes_to_greenhouse[amax_output1]
+                    # save visualized seg maps & predication prob map
+    #                if args.outsource1 == 'camvid':
+                    if os_data == 'camvid':
+                        amax_output = id_camvid_to_greenhouse[amax_output]
+                    elif os_data == 'cityscapes':
+                        amax_output = id_cityscapes_to_greenhouse[amax_output]
+                    elif os_data == 'forest':
+                        amax_output = id_forest_to_greenhouse[amax_output]
 
-                if args.outsource2 == 'camvid':
-                    amax_output2 = id_camvid_to_greenhouse[amax_output2]
-                else:
-                    amax_output2 = id_cityscapes_to_greenhouse[amax_output2]
+    #                if args.outsource2 == 'camvid':
+    #                    amax_output2 = id_camvid_to_greenhouse[amax_output2]
+    #                else:
+    #                    amax_output2 = id_cityscapes_to_greenhouse[amax_output2]
+                    output_list.append(amax_output)
 
-                amax_output, kld = merge_outputs(amax_output1, amax_output2, kld1, kld2)
+#                amax_output, kld = merge_outputs(amax_output1, amax_output2, kld1, kld2)
+                amax_output = merge_outputs(np.array(output_list), seg_classes=args.classes)
 
     #            label = label_2_id[np.asarray(label.numpy(), dtype=np.uint8)]
                 path_name = name[0]
