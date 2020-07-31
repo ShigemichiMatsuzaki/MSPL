@@ -272,6 +272,7 @@ def set_logger(output_dir=None, log_file=None, debug=False):
 def import_os_model(args, os_model, os_weights, os_seg_classes):
     print("import_os_model : {}".format(os_weights))
     # Import model
+    print(os_model)
     if os_model == 'espdnet':
         from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
         tmp_args = copy.deepcopy(args)
