@@ -49,6 +49,13 @@ id_cityscapes_to_greenhouse = np.array([
     2, # Bicycle
     4 # Background
 ])
+id_forest_to_greenhouse = np.array([
+    3, # road
+    1, # grass
+    1, # tree
+    2, # sky
+    2  # obstacle
+])
 
 color_encoding = OrderedDict([
     ('end_of_plant', (0, 255, 0)),
