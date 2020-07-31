@@ -27,6 +27,7 @@ from utilities.utils import AverageMeter
 from utilities.metrics.segmentation_miou import MIOU
 from data_loader.segmentation.greenhouse import id_camvid_to_greenhouse
 from data_loader.segmentation.greenhouse import id_cityscapes_to_greenhouse
+from data_loader.segmentation.greenhouse import id_forest_to_greenhouse
 
 def load_weights(model, weights):
     if os.path.isfile(weights):
@@ -108,6 +109,23 @@ def main(args):
         seg_classes = len(CAMVID_CLASS_LIST)
 
         args.use_depth = False
+    elif args.dataset == 'forest':
+        from data_loader.segmentation.freiburg_forest import FreiburgForestDataset, FOREST_CLASS_LIST, color_encoding
+        train_dataset = FreiburgForestDataset(
+            train=True, size=crop_size, scale=args.scale, normalize=args.normalize)
+        val_dataset = FreiburgForestDataset(
+            train=False, size=crop_size, scale=args.scale, normalize=args.normalize)
+
+        seg_classes = len(FOREST_CLASS_LIST)
+        tmp_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False)
+
+        class_wts = calc_cls_class_weight(tmp_loader, seg_classes, inverted=True)
+        class_wts = torch.from_numpy(class_wts).float().to(device)
+#        class_wts = torch.ones(seg_classes)
+        print("class weights : {}".format(class_wts))
+
+        args.use_depth = False
+
     else:
         print_error_message('Dataset: {} not yet supported'.format(args.dataset))
         exit(-1)
@@ -187,6 +205,8 @@ def main(args):
 #                target = torch.from_numpy(target)
             elif args.dataset == 'city':
                 outputs_argmax = id_cityscapes_to_greenhouse[outputs_argmax]
+            elif args.dataset == 'forest':
+                outputs_argmax = id_forest_to_greenhouse[outputs_argmax]
 #                target = id_cityscapes_to_greenhouse[target.cpu().numpy()]
 #                target = torch.from_numpy(target)
 
@@ -307,6 +327,8 @@ if __name__ == "__main__":
     elif args.dataset == 'sun':
         args.scale = (0.5, 2.0)
     elif args.dataset == 'camvid':
+        args.scale = (0.5, 2.0)
+    elif args.dataset == 'forest':
         args.scale = (0.5, 2.0)
     else:
         print_error_message('{} dataset not yet supported'.format(args.dataset))
