@@ -28,18 +28,74 @@ path_list_dl_cs=(\
 	model_deeplabv3_city/s_2.0_sch_hybrid_loss_ce_res_512_sc_0.25_0.5_rgb/20200714-172451/deeplabv3_2.0_512_best.pth \
 )
 
-for path in "${path_list_esp_ff[@]}"; 
+outsource1=camvid 
+outsource2=cityscapes
+outsource3=forest
+os_model1=espdnetue 
+os_model2=espdnetue 
+os_model3=espdnetue 
+os_weights1="/tmp/runs/model_espdnetue_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_1.0_1.0_rgb/20200715-164256/espdnetue_2.0_480_best.pth"
+os_weights2="/tmp/runs/model_espdnetue_city/s_2.0_sch_hybrid_loss_ce_res_512_sc_0.25_0.5_rgb/20200717-161219/espdnetue_2.0_512_best.pth"
+os_weights3="/tmp/runs/model_espdnetue_forest/s_2.0_sch_hybrid_loss_ce_res_480_sc_1.0_1.0_rgb/20200729-181614/espdnetue_2.0_480_best.pth"
+val_list_a="val_greenhouse_more.lst"
+val_list_b="val_greenhouse2.lst"
+val_list_c="val_cucumber_r.lst"
+val_lists=(
+  $val_list_a
+  $val_list_b
+  $val_list_c
+)
+
+# CamVid
+for val in "${val_lists[@]}"; 
 do
 CUDA_VISIBLE_DEVICES=0 python eval_label.py \
   --data-path ./vision_datasets/camvid/ \
   --savedir /tmp/runs/eval_label \
+  --val-list $val \
   --batch-size 24 \
   --crop-size 480 256 \
-  --dataset forest \
+  --dataset $outsource1 \
   --model espdnetue \
-  --finetune /tmp/runs/$path
+  --output-image true \
+  --os-model1 $os_model1 \
+  --outsource1 $outsource1\
+  --os-weights1 $os_weights1
 done
 
+# Cityscapes
+#for val in "${val_lists[@]}"; 
+#do
+#CUDA_VISIBLE_DEVICES=0 python eval_label.py \
+#  --data-path ./vision_datasets/camvid/ \
+#  --savedir /tmp/runs/eval_label \
+#  --val-list $val \
+#  --batch-size 24 \
+#  --crop-size 480 256 \
+#  --dataset city \
+#  --model espdnetue \
+#  --output-image true \
+#  --os-model1 $os_model2 \
+#  --outsource1 $outsource2\
+#  --os-weights1 $os_weights2
+#done
+#
+## Forest
+#for val in "${val_lists[@]}"; 
+#do
+#CUDA_VISIBLE_DEVICES=0 python eval_label.py \
+#  --data-path ./vision_datasets/camvid/ \
+#  --savedir /tmp/runs/eval_label \
+#  --val-list $val \
+#  --batch-size 24 \
+#  --crop-size 480 256 \
+#  --dataset $outsource3 \
+#  --model espdnetue \
+#  --output-image true \
+#  --os-model1 $os_model3 \
+#  --outsource1 $outsource3\
+#  --os-weights1 $os_weights3
+#done
 
   #--model espdnetue \
   #--finetune /tmp/runs/model_espdnetue_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_2.0_1.5_rgb/20200715-111451/espdnetue_2.0_480_best.pth \

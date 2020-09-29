@@ -14,7 +14,6 @@ class MIOU(object):
         if isinstance(output, tuple):
             output = output[0]
 
-        print(output.size())
         if len(output.size()) == 4: # Case of raw outputs
             _, pred = torch.max(output, 1)
         else:                               # Case of argmax

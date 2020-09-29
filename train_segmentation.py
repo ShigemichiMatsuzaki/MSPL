@@ -71,8 +71,8 @@ def main(args):
     elif args.dataset == 'greenhouse':
         print(args.use_depth)
         from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST, color_encoding
-        train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='train_greenhouse_gt.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
-        val_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='val_greenhouse.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+        train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name=args.train_list, train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.greenhouse_use_trav)
+        val_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name=args.val_list, train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth, use_traversable=args.greenhouse_use_trav)
         class_weights = np.load('class_weights.npy')# [:4]
         print(class_weights)
         class_wts = torch.from_numpy(class_weights).float().to(device)
@@ -511,6 +511,9 @@ if __name__ == "__main__":
     parser.add_argument('--use-nid', default=False, type=bool, help='Use NID loss')
     parser.add_argument('--use-aux', default=False, type=bool, help='Use auxiliary loss')
     parser.add_argument('--normalize', default=False, type=bool, help='Use auxiliary loss')
+    parser.add_argument('--greenhouse-use-trav', default=False, type=bool, help='Use auxiliary loss')
+    parser.add_argument('--train-list', default='train_greenhouse_no_gamma.lst', type=str, help='Name of the list of train data')
+    parser.add_argument('--val-list', default='val_greenhouse.lst', type=str, help='Name of the list of val data')
 
     args = parser.parse_args()
 

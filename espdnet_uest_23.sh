@@ -1,5 +1,5 @@
-train_list="train_1_2.lst"
-val_list="val_cucumber_r.lst"
+train_list="train_2_3.lst"
+val_list="val_greenhouse_more.lst"
 restore_from="/tmp/runs/model_espdnetue_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200715-230509/espdnetue_2.0_480_best.pth"
 outsource1=camvid 
 outsource2=cityscapes

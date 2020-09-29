@@ -32,7 +32,6 @@ def main(args):
     print_info_message('FLOPs: {:.2f} million'.format(flops))
     print_info_message('Network Parameters: {:.2f} million'.format(num_params))
 
-
     if not args.weights:
         print_info_message('Grabbing location of the ImageNet weights from the weight dictionary')
         from model.weight_locations.classification import model_weight_map

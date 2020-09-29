@@ -211,7 +211,7 @@ class GreenhouseRGBDSegmentation(data.Dataset):
     def transforms(self):
         train_transforms = Compose(
             [
-#                RandomScale(scale=self.scale),
+                RandomScale(scale=self.scale),
 #                RandomCrop(crop_size=self.size),
                 Resize(size=self.size),
                 RandomFlip(),

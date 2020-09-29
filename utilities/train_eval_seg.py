@@ -11,8 +11,10 @@ from utilities.print_utils import *
 from torch.nn.parallel import gather
 from loss_fns.segmentation_loss import SegmentationLoss, NIDLoss, PixelwiseKLD
 from collections import OrderedDict
+import numpy as np
 
-def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, device='cuda', use_depth=False, add_criterion=None, weight=1.0):
+def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, device='cuda', 
+              use_depth=False, add_criterion=None, greenhouse_use_trav=False, weight=1.0):
     losses = AverageMeter()
     ce_losses = AverageMeter()
     nid_losses = AverageMeter()
@@ -80,11 +82,16 @@ def train_seg(model, dataset_loader, optimizer, criterion, num_classes, epoch, d
     print(union_meter.sum)
     print(inter_meter.sum / (union_meter.sum + 1e-10) * 100)
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
-    miou = iou.mean() * 100
+
+    if greenhouse_use_trav:
+        miou = iou.mean() * 100
+    else:
+        miou = iou[[1, 2, 3]].mean() * 100
 
     return miou, losses.avg
 
-def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda', use_depth=False, add_criterion=None):
+def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda', 
+            use_depth=False, add_criterion=None, greenhouse_use_trav=False):
     model.eval()
     inter_meter = AverageMeter()
     union_meter = AverageMeter()
@@ -141,7 +148,12 @@ def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda'
                       (i, len(dataset_loader), batch_time.avg, loss_, miou))
 
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
-    miou = iou.mean() * 100
+
+    if greenhouse_use_trav:
+        miou = iou.mean() * 100
+    else:
+        miou = iou[[1, 2, 3]].mean() * 100
+#        miou = np.array(iou)[1, 2, 3].mean() * 100
 
     print_info_message('Mean IoU: {0:.2f}'.format(miou))
     if criterion:
@@ -150,7 +162,7 @@ def val_seg(model, dataset_loader, criterion=None, num_classes=21, device='cuda'
         return miou, 0
 
 def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes, 
-                 epoch, device='cuda', use_depth=False, add_criterion=None, weight=1.0):
+                 epoch, device='cuda', use_depth=False, add_criterion=None, weight=1.0, greenhouse_use_trav=False):
     losses = AverageMeter()
     ce_losses = AverageMeter()
     nid_losses = AverageMeter()
@@ -163,6 +175,7 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
     miou_class = MIOU(num_classes=num_classes-1)
     kld_layer = PixelwiseKLD()
     print("train_seg_ue()")
+    b = 0.015
     for i, batch in enumerate(dataset_loader):
         inputs = batch[0].to(device=device)
         target = batch[1].to(device=device)
@@ -205,6 +218,7 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
         inter_meter.update(inter)
         union_meter.update(union)
         
+        loss = (loss-b).abs()+b
         losses.update(loss.item(), inputs.size(0))
         if add_criterion is not None:
             nid_losses.update(loss2.item(), 1)
@@ -224,14 +238,19 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
                   (epoch, i, len(dataset_loader), batch_time.avg, losses.avg, miou, nid_losses.avg))
 
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
-    miou = iou.mean() * 100
+    if greenhouse_use_trav:
+        miou = iou.mean() * 100
+    else:
+        miou = iou[[1, 2, 3]].mean() * 100
+#        miou = iou.mean() * 100
     print(inter_meter.sum)
     print(union_meter.sum)
     print(inter_meter.sum / (union_meter.sum + 1e-10) * 100)
 
     return miou, losses.avg
 
-def val_seg_ue(model, dataset_loader, criterion=None, num_classes=21, device='cuda', use_depth=False, add_criterion=None):
+def val_seg_ue(model, dataset_loader, criterion=None, num_classes=21, 
+               device='cuda', use_depth=False, add_criterion=None, greenhouse_use_trav=False):
     model.eval()
     inter_meter = AverageMeter()
     union_meter = AverageMeter()
@@ -294,7 +313,12 @@ def val_seg_ue(model, dataset_loader, criterion=None, num_classes=21, device='cu
                       (i, len(dataset_loader), batch_time.avg, loss_, miou))
 
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
-    miou = iou.mean() * 100
+    if greenhouse_use_trav:
+        miou = iou.mean() * 100
+    else:
+#        miou = np.array(iou)[1, 2, 3].mean() * 100
+        miou = iou[[1, 2, 3]].mean() * 100
+#        miou = iou.mean() * 100
 
     print_info_message('Mean IoU: {0:.2f}'.format(miou))
     if criterion:

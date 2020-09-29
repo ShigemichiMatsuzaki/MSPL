@@ -4,3 +4,4 @@ __pycache__
 .idea
 results_segmentation/
 pretrained_models/
+*.png

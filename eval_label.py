@@ -11,11 +11,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
-from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, calc_cls_class_weight
+from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, calc_cls_class_weight, import_os_model
 from torch.utils.tensorboard import SummaryWriter
 #from tensorboardX import SummaryWriter
+from PIL import Image
 
-from loss_fns.segmentation_loss import SegmentationLoss, NIDLoss
+from loss_fns.segmentation_loss import SegmentationLoss, NIDLoss, UncertaintyWeightedSegmentationLoss, PixelwiseKLD
 import random
 import math
 import time
@@ -45,6 +46,73 @@ def load_weights(model, weights):
     model_dict.update(overlap_dict)
     model.load_state_dict(model_dict)
 
+def get_output(model, image, model_name='espdnetue', device='cuda'):
+
+#    ## upsampling layer
+#    if version.parse(torch.__version__) >= version.parse('0.4.0'):
+#        interp = nn.Upsample(size=test_image_size, mode='bilinear', align_corners=True)
+#    else:
+#        interp = nn.Upsample(size=test_image_size, mode='bilinear')
+
+    model.to(device)
+    kld_layer = PixelwiseKLD()
+    softmax2d = nn.Softmax2d()
+    # if args.model == 'ENet':
+    '''
+    Get outputs from the input images
+    '''
+    # Forward the data
+    if not args.use_depth: #or outsource == 'camvid':
+        output2 = model(image.to(device))
+
+    # Calculate the output from the two classification layers
+    if isinstance(output2, OrderedDict):
+        pred = output2['out']
+        pred_aux = output2['aux']
+    elif model_name == 'espdnetue':
+        pred = output2[0]
+        pred_aux = output2[1]
+
+    output2 = pred + 0.5 * pred_aux
+
+#    output = softmax2d(interp(output2)).cpu().data[0].numpy()
+    output = softmax2d(output2).cpu().data[0].numpy()
+
+    kld = kld_layer(pred, pred_aux).cpu().data[0].numpy()
+
+    return output, kld
+
+def merge_outputs(amax_outputs, seg_classes, thresh=None):
+    # If not specified, the label with votes more than half of the number of the outputs is selected
+    num_data = amax_outputs.shape[0]
+    if thresh is None or thresh == 'half':
+        thresh = num_data // 2 + 1
+    elif thresh == 'all':
+        thresh = num_data
+    elif isinstance(thresh, int) and thresh <= num_data:
+        pass 
+    else:
+        thresh = num_data // 2 + 1
+    
+    # Convert the tuple of ndarrays to an ndarray
+    # If there is only one data, explicitly reshape the array
+#    amax_outputs = np.array(amax_outputs)
+#    if len(amax_outputs.shape) == 2:
+#        amax_outputs = amax_outputs.reshape(1, amax_outputs.shape[0], amax_outputs.shape[1])
+
+    counts_lst = []
+    for class_id in range(seg_classes):
+        # Count the number of data with class 'class_id' on each pixel
+        count = (amax_outputs == class_id).sum(axis=0)
+        counts_lst.append(count)
+
+    counts_np = np.array(counts_lst)
+    count_amax = counts_np.argmax(axis=0)
+    count_max  = counts_np.max(axis=0)
+    count_amax[count_max < thresh] = 4
+
+    return count_amax
+
 def main(args):
     crop_size = args.crop_size
     assert isinstance(crop_size, tuple)
@@ -59,120 +127,38 @@ def main(args):
     device = 'cuda' if num_gpus > 0 else 'cpu'
 
     from data_loader.segmentation.greenhouse import color_encoding as color_encoding_greenhouse
+    from data_loader.segmentation.greenhouse import color_palette
     from data_loader.segmentation.camvid import color_encoding as color_encoding_camvid
-    if args.dataset == 'pascal':
-        from data_loader.segmentation.voc import VOCSegmentation, VOC_CLASS_LIST
-        train_dataset = VOCSegmentation(root=args.data_path, train=True, crop_size=crop_size, scale=args.scale,
-                                        coco_root_dir=args.coco_path)
-        val_dataset = VOCSegmentation(root=args.data_path, train=False, crop_size=crop_size, scale=args.scale)
-    elif args.dataset == 'city':
-        from data_loader.segmentation.cityscapes import CityscapesSegmentation, CITYSCAPE_CLASS_LIST
-        train_dataset = CityscapesSegmentation(root=args.data_path, train=True, coarse=False)
-        val_dataset = CityscapesSegmentation(root=args.data_path, train=False, coarse=False)
 
-        seg_classes = len(CITYSCAPE_CLASS_LIST)
-    elif args.dataset == 'greenhouse':
-        print(args.use_depth)
-        from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
-        train_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='train_greenhouse_gt.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
-        val_dataset = GreenhouseRGBDSegmentation(root=args.data_path, list_name='val_greenhouse.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
-        class_weights = np.load('class_weights.npy')# [:4]
-        print(class_weights)
-        class_wts = torch.from_numpy(class_weights).float().to(device)
+    # Outsource
+    os_model_name_list = [args.os_model1, args.os_model2, args.os_model3]
+    os_weights_name_list = [args.os_weights1, args.os_weights2, args.os_weights3]
+    os_data_name_list = [args.outsource1, args.outsource2, args.outsource3]
+    os_model_name_list = [x for x in os_model_name_list if x is not None]
+    os_weights_name_list = [x for x in os_weights_name_list if x is not None] 
+    os_data_name_list = [x for x in os_data_name_list if x is not None]
+    os_model_list = []
+    print(os_model_name_list)
+    print(os_weights_name_list)
+    print(os_data_name_list)
+    for os_m, os_w, os_d in zip(os_model_name_list, os_weights_name_list, os_data_name_list):
+        if os_d == 'camvid':
+            os_seg_classes = 13
+        elif os_d == 'cityscapes':
+            os_seg_classes = 20
+        elif os_d == 'forest' or os_d == 'greenhouse':
+            os_seg_classes = 5
 
-        print(GREENHOUSE_CLASS_LIST)
-        seg_classes = len(GREENHOUSE_CLASS_LIST)
-    elif args.dataset == 'ishihara':
-        print(args.use_depth)
-        from data_loader.segmentation.ishihara_rgbd import IshiharaRGBDSegmentation, ISHIHARA_RGBD_CLASS_LIST
-        train_dataset = IshiharaRGBDSegmentation(root=args.data_path, list_name='ishihara_rgbd_train.txt', train=True, size=crop_size, scale=args.scale, use_depth=args.use_depth)
-        val_dataset = IshiharaRGBDSegmentation(root=args.data_path, list_name='ishihara_rgbd_val.txt', train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth)
+        os_model = import_os_model(args, os_model=os_m, os_weights=os_w, os_seg_classes=os_seg_classes)
+        os_model_list.append(os_model)
 
-        seg_classes = len(ISHIHARA_RGBD_CLASS_LIST)
-    elif args.dataset == 'sun':
-        print(args.use_depth)
-        from data_loader.segmentation.sun_rgbd import SUNRGBDSegmentation, SUN_RGBD_CLASS_LIST
-        train_dataset = SUNRGBDSegmentation(root=args.data_path, list_name='sun_rgbd_train.txt', train=True, size=crop_size, ignore_idx=args.ignore_idx, scale=args.scale, use_depth=args.use_depth)
-        val_dataset = SUNRGBDSegmentation(root=args.data_path, list_name='sun_rgbd_val.txt', train=False, size=crop_size, ignore_idx=args.ignore_idx, scale=args.scale, use_depth=args.use_depth)
-
-        seg_classes = len(SUN_RGBD_CLASS_LIST)
-    elif args.dataset == 'camvid':
-        print(args.use_depth)
-        from data_loader.segmentation.camvid import CamVidSegmentation, CAMVID_CLASS_LIST
-        train_dataset = CamVidSegmentation(
-            root=args.data_path, list_name='train_camvid.txt', 
-            train=True, size=crop_size, scale=args.scale, label_conversion=args.label_conversion, normalize=args.normalize)
-        val_dataset = CamVidSegmentation(
-            root=args.data_path, list_name='val_camvid.txt',
-            train=False, size=crop_size, scale=args.scale, label_conversion=args.label_conversion, normalize=args.normalize)
-        
-        seg_classes = len(CAMVID_CLASS_LIST)
-
-        args.use_depth = False
-    elif args.dataset == 'forest':
-        from data_loader.segmentation.freiburg_forest import FreiburgForestDataset, FOREST_CLASS_LIST, color_encoding
-        train_dataset = FreiburgForestDataset(
-            train=True, size=crop_size, scale=args.scale, normalize=args.normalize)
-        val_dataset = FreiburgForestDataset(
-            train=False, size=crop_size, scale=args.scale, normalize=args.normalize)
-
-        seg_classes = len(FOREST_CLASS_LIST)
-        tmp_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False)
-
-        class_wts = calc_cls_class_weight(tmp_loader, seg_classes, inverted=True)
-        class_wts = torch.from_numpy(class_wts).float().to(device)
-#        class_wts = torch.ones(seg_classes)
-        print("class weights : {}".format(class_wts))
-
-        args.use_depth = False
-
-    else:
-        print_error_message('Dataset: {} not yet supported'.format(args.dataset))
-        exit(-1)
-
-    print_info_message('Training samples: {}'.format(len(train_dataset)))
-    print_info_message('Validation samples: {}'.format(len(val_dataset)))
-
-    if args.model == 'espnetv2':
-        from model.segmentation.espnetv2 import espnetv2_seg
-        args.classes = seg_classes
-        model = espnetv2_seg(args)
-    elif args.model == 'espdnet':
-        from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
-        args.classes = seg_classes
-        print("Trainable fusion : {}".format(args.trainable_fusion))
-        print("Segmentation classes : {}".format(seg_classes))
-        model = espdnet_seg_with_pre_rgbd(args, load_entire_weights=True)
-    elif args.model == 'espdnetue':
-        from model.segmentation.espdnet_ue import espdnetue_seg2
-        args.classes = seg_classes
-        print("Trainable fusion : {}".format(args.trainable_fusion))
-        print("Segmentation classes : {}".format(seg_classes))
-        model = espdnetue_seg2(args, load_entire_weights=True, fix_pyr_plane_proj=True)
-    elif args.model == 'deeplabv3':
-        # from model.segmentation.deeplabv3 import DeepLabV3
-        from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
-
-        args.classes = seg_classes
-        # model = DeepLabV3(seg_classes)
-        model = deeplabv3_resnet101(num_classes=seg_classes, aux_loss=True)
-        torch.backends.cudnn.enabled = False
-        load_weights(model, args.finetune)
-
-    elif args.model == 'dicenet':
-        from model.segmentation.dicenet import dicenet_seg
-        model = dicenet_seg(args, classes=seg_classes)
-    else:
-        print_error_message('Arch: {} not yet supported'.format(args.model))
-        exit(-1)
-
-    model.to(device=device)
     from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
-    val_dataset = GreenhouseRGBDSegmentation(root='./vision_datasets/greenhouse/', list_name='val_greenhouse_more.lst', use_traversable=False, 
-                                             train=False, size=crop_size, scale=args.scale, use_depth=args.use_depth,
+    seg_classes = len(GREENHOUSE_CLASS_LIST)
+    val_dataset = GreenhouseRGBDSegmentation(root='./vision_datasets/greenhouse/', list_name=args.val_list, use_traversable=False, 
+                                             train=False, size=crop_size, use_depth=args.use_depth,
                                              normalize=args.normalize)
 
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=1, shuffle=False,
                                              pin_memory=True, num_workers=args.workers)
 
     start_epoch = 0
@@ -188,29 +174,52 @@ def main(args):
         for i, batch in enumerate(val_loader):
             inputs = batch[0].to(device=device)
             target = batch[1].to(device=device)
+            name   = batch[2]
             
-            outputs = model(inputs)
+            output_list = []
+            for m, os_data in zip(os_model_list, os_data_name_list):
+                # Output: Numpy, KLD: Numpy
+                output, _ = get_output(m, inputs) 
+#                output2, _ = get_output(model2, image)
 
-            if isinstance(outputs, OrderedDict):
-                outputs = outputs['out'] + 0.5 * outputs['aux']
-            elif isinstance(outputs, (list, tuple)):
-                outputs = outputs[0] + 0.5 * outputs[1]
+                output = output.transpose(1,2,0)
+#                output2 = output2.transpose(1,2,0)
+                amax_output = np.asarray(np.argmax(output, axis=2), dtype=np.uint8)
+#                amax_output2 = np.asarray(np.argmax(output2, axis=2), dtype=np.uint8)
 
-            _, outputs_argmax = torch.max(outputs, 1)
-            outputs_argmax = outputs_argmax.cpu().numpy()
+                # save visualized seg maps & predication prob map
+#                if args.outsource1 == 'camvid':
+                if os_data == 'camvid':
+                    amax_output = id_camvid_to_greenhouse[amax_output]
+                elif os_data == 'cityscapes':
+                    amax_output = id_cityscapes_to_greenhouse[amax_output]
+                elif os_data == 'forest':
+                    amax_output = id_forest_to_greenhouse[amax_output]
 
-            if args.dataset == 'camvid':
-                outputs_argmax = id_camvid_to_greenhouse[outputs_argmax]
-#                target = id_camvid_to_greenhouse[target.cpu().numpy()]
-#                target = torch.from_numpy(target)
-            elif args.dataset == 'city':
-                outputs_argmax = id_cityscapes_to_greenhouse[outputs_argmax]
-            elif args.dataset == 'forest':
-                outputs_argmax = id_forest_to_greenhouse[outputs_argmax]
-#                target = id_cityscapes_to_greenhouse[target.cpu().numpy()]
-#                target = torch.from_numpy(target)
+#                if args.outsource2 == 'camvid':
+#                    amax_output2 = id_camvid_to_greenhouse[amax_output2]
+#                else:
+#                    amax_output2 = id_cityscapes_to_greenhouse[amax_output2]
+                output_list.append(amax_output)
 
-            outputs_argmax = torch.from_numpy(outputs_argmax)
+#            amax_output, kld = merge_outputs(amax_output1, amax_output2, kld1, kld2)
+            amax_output = merge_outputs(np.array(output_list), 
+                seg_classes=5, thresh='all')
+            
+            if args.output_image:
+                for path_name in name:
+#                    path_name = name[0]
+                    image_name = path_name.split('/')[-1]
+                    image_name = image_name.rsplit('.', 1)[0]
+                    amax_output_img_color = colorize_mask(amax_output, color_palette)
+                    amax_output_img_color.save('%s/%s_color.png' % (args.savedir, image_name))
+
+                    for output_i, name_i in zip(output_list, os_data_name_list):
+                        amax_output_img_color = colorize_mask(output_i, color_palette)
+                        amax_output_img_color.save('%s/%s_color_%s.png' % (args.savedir, image_name, name_i))
+
+#            outputs_argmax = torch.from_numpy(outputs_argmax)
+            outputs_argmax = torch.from_numpy(amax_output)
             
             inter, union = miou_class.get_iou(outputs_argmax, target)
             inter_meter.update(inter)
@@ -221,15 +230,15 @@ def main(args):
             #end = time.time()
 
 
-            in_training_visualization_img(
-                model, 
-                images=batch[0].to(device=device),
-                labels=target,
-                predictions=outputs_argmax,
-                class_encoding=color_encoding_greenhouse,
-                writer=writer,
-                data='label_eval',
-                device=device)
+#            in_training_visualization_img(
+#                model, 
+#                images=batch[0].to(device=device),
+#                labels=target,
+#                predictions=outputs_argmax,
+#                class_encoding=color_encoding_greenhouse,
+#                writer=writer,
+#                data='label_eval',
+#                device=device)
 
             print("Batch {}/{} finished".format(i+1, len(val_loader)))
     
@@ -239,6 +248,11 @@ def main(args):
 
     writer.close()
 
+def colorize_mask(mask, palette):
+    # mask: numpy array of the mask
+    new_mask = Image.fromarray(mask.astype(np.uint8)).convert('P')
+    new_mask.putpalette(palette)
+    return new_mask
 
 if __name__ == "__main__":
     from commons.general_details import segmentation_models, segmentation_schedulers, segmentation_loss_fns, \
@@ -301,37 +315,35 @@ if __name__ == "__main__":
     parser.add_argument('--use-nid', default=False, type=bool, help='Use NID loss')
     parser.add_argument('--use-aux', default=False, type=bool, help='Use auxiliary loss')
     parser.add_argument('--normalize', default=False, type=bool, help='Use auxiliary loss')
+    parser.add_argument('--output-image', default=False, type=bool, help='Save images instead of writing in tensorboard log')
 #    parser.add_argument('--suffix', default='', type=str, help='Suffix of the save directory')
+    parser.add_argument("--outsource1", type=str, default=None, dest='outsource1',
+                        help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
+    parser.add_argument("--os-model1", type=str, default="espdnet", dest='os_model1',
+                        help="Model for generating pseudo-labels")
+    parser.add_argument("--os-weights1", type=str, default='./results_segmentation/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb_/20200420-095339/espdnet_2.0_480_best.pth', dest='os_weights1',
+                        help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
+    parser.add_argument("--outsource2", type=str, default=None, dest='outsource2',
+                        help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
+    parser.add_argument("--os-model2", type=str, default=None, dest='os_model2',
+                        help="Model for generating pseudo-labels")
+    parser.add_argument("--os-weights2", type=str, default=None, dest='os_weights2',
+                        help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
+    parser.add_argument("--outsource3", type=str, default=None, dest='outsource3',
+                        help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
+    parser.add_argument("--os-model3", type=str, default=None, dest='os_model3',
+                        help="Model for generating pseudo-labels")
+    parser.add_argument("--os-weights3", type=str, default=None, dest='os_weights3',
+                        help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
+    parser.add_argument("--val-list", type=str, default='val_greenhouse_more.lst', dest='val_list',
+                        help="Dataset to test the model")
 
     args = parser.parse_args()
 
     random.seed(1882)
     torch.manual_seed(1882)
 
-    if args.dataset == 'pascal':
-        args.scale = (0.5, 2.0)
-    elif args.dataset == 'city':
-        if args.crop_size[0] == 512:
-            args.scale = (0.25, 0.5)
-        elif args.crop_size[0] == 1024:
-            args.scale = (0.35, 1.0)  # 0.75 # 0.5 -- 59+
-        elif args.crop_size[0] == 2048:
-            args.scale = (1.0, 2.0)
-        else:
-            print_error_message('Select image size from 512x256, 1024x512, 2048x1024')
-        print_log_message('Using scale = ({}, {})'.format(args.scale[0], args.scale[1]))
-    elif args.dataset == 'greenhouse':
-        args.scale = (0.5, 2.0)
-    elif args.dataset == 'ishihara':
-        args.scale = (0.5, 2.0)
-    elif args.dataset == 'sun':
-        args.scale = (0.5, 2.0)
-    elif args.dataset == 'camvid':
-        args.scale = (0.5, 2.0)
-    elif args.dataset == 'forest':
-        args.scale = (0.5, 2.0)
-    else:
-        print_error_message('{} dataset not yet supported'.format(args.dataset))
+
 
     if not args.finetune:
         from model.weight_locations.classification import model_weight_map
@@ -362,9 +374,8 @@ if __name__ == "__main__":
     now += datetime.timedelta(hours=9)
     timestr = now.strftime("%Y%m%d-%H%M%S")
 
-    suffix = args.finetune.rsplit('/', 2)[1]
-    args.savedir = '{}/{}_{}_{}_{}'.format(
-        args.savedir, args.model, args.dataset, suffix, timestr)
+    args.savedir = '{}/{}_{}_{}'.format(
+        args.savedir, args.model, args.dataset, timestr)
 
     main(args)
 

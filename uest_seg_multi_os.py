@@ -33,8 +33,8 @@ import random
 from utilities.utils import save_checkpoint, model_parameters, compute_flops, in_training_visualization_img, set_logger, calc_cls_class_weight, import_os_model
 from utilities.utils import AverageMeter
 from utilities.metrics.segmentation_miou import MIOU
-from utilities.train_eval_seg import train_seg as train
-from utilities.train_eval_seg import val_seg as val
+#from utilities.train_eval_seg import train_seg as train
+#from utilities.train_eval_seg import val_seg as val
 from loss_fns.segmentation_loss import NIDLoss, UncertaintyWeightedSegmentationLoss, PixelwiseKLD, SegmentationLoss
 
 ###
@@ -306,6 +306,7 @@ def get_arguments():
     parser.add_argument('--conservative-label', default=False, type=bool,
                         help='Only use labels that two models agree')
     parser.add_argument('--label-update', default=-1, type=int, help='Update pseudo-label after the specified step')
+    parser.add_argument('--merge-label-policy', default='half', help='Policy of merging pseudo-labels from multiple models. ["all", "half", int]')
 
     return parser.parse_args()
 
@@ -417,8 +418,8 @@ def main():
     if args.dataset == 'greenhouse':
         from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
 
-        class_weights = np.load('class_weights.npy')# [:4]
-        class_weights = torch.from_numpy(class_weights).float().to(device)
+#        class_weights = np.load('class_weights.npy')# [:4]
+#        class_weights = torch.from_numpy(class_weights).float().to(device)
 
         seg_classes = len(GREENHOUSE_CLASS_LIST)
         class_encoding = OrderedDict([
@@ -466,7 +467,7 @@ def main():
             os_seg_classes = 13
         elif os_d == 'cityscapes':
             os_seg_classes = 20
-        elif os_d == 'forest':
+        elif os_d == 'forest' or os_d == 'greenhouse':
             os_seg_classes = 5
 
         os_model = import_os_model(args, os_model=os_m, os_weights=os_w, os_seg_classes=os_seg_classes)
@@ -474,8 +475,7 @@ def main():
 
 #        os_model2 = import_os_model(args, os_model=args.os_model2, os_weights=args.os_weights2, os_seg_classes=13 if args.outsource2 == 'camvid' else 20)
 
-    class_weights = torch.ones(seg_classes).float().to(device)
-    print(class_weights)
+    # class_weights = torch.ones(seg_classes).float().to(device)
 
     # List of training images
     if args.use_depth:
@@ -507,18 +507,7 @@ def main():
     metric = None
     print("Let's start! Hey hey!")
 
-    # Loss functions
-    if args.use_uncertainty:
-        criterion = UncertaintyWeightedSegmentationLoss(seg_classes, class_weights, args.ignore_label)
-    else:
-        criterion = SegmentationLoss(n_classes=seg_classes,
-                                     device=device, ignore_idx=args.ignore_label,
-                                     class_wts=class_weights.to(device))
 
-    criterion_test = SegmentationLoss(n_classes=seg_classes,
-                                     device=device, ignore_idx=args.ignore_label,
-                                     class_wts=class_weights.to(device))
-    nid_loss = NIDLoss(image_bin=args.nid_bin, label_bin=seg_classes) if args.use_nid else None
 
     # 
     # Main loop
@@ -549,7 +538,21 @@ def main():
     if not os.path.exists(save_conf_path):
         os.makedirs(save_conf_path)
 
+    tgt_train_lst, class_weights = generate_pseudo_label_multi_model(os_model_list, os_data_name_list, device, save_path, 0, 
+        tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer)
 
+    # Loss functions
+    if args.use_uncertainty:
+        criterion = UncertaintyWeightedSegmentationLoss(seg_classes, class_weights, args.ignore_label)
+    else:
+        criterion = SegmentationLoss(n_classes=seg_classes,
+                                     device=device, ignore_idx=args.ignore_label,
+                                     class_wts=class_weights.to(device))
+
+    criterion_test = SegmentationLoss(n_classes=seg_classes,
+                                     device=device, ignore_idx=args.ignore_label,
+                                     class_wts=class_weights.to(device))
+    nid_loss = NIDLoss(image_bin=args.nid_bin, label_bin=seg_classes) if args.use_nid else None
 #    if args.outsource is not None:
 #        tgt_train_lst = val(model_outsource, device, save_path, 
 #                            0, tgt_num, label_2_id, valid_labels,
@@ -563,11 +566,12 @@ def main():
     for round_idx in range(args.num_rounds):
         if round_idx == 0:
 #            tgt_train_lst = generate_pseudo_label_multi_model(os_model1, os_model2, device, save_path, round_idx, 
-            tgt_train_lst = generate_pseudo_label_multi_model(os_model_list, os_data_name_list, device, save_path, round_idx, 
-                tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer)
+            pass
         elif round_idx >= args.label_update and args.label_update >= 0:
-            tgt_train_lst = generate_pseudo_label(model, device, save_path, round_idx, 
+            tgt_train_lst, class_weights = generate_pseudo_label(model, device, save_path, round_idx, 
                 tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer)
+
+            criterion = UncertaintyWeightedSegmentationLoss(seg_classes, class_weights, args.ignore_label)
 
         ########## pseudo-label generation
         if round_idx != args.num_rounds - 1: # If it's not the last round
@@ -750,37 +754,6 @@ def get_output(model, image, model_name='espdnetue', device='cuda'):
 
     kld = kld_layer(pred, pred_aux).cpu().data[0].numpy()
 
-    '''
-    Get outputs from the flipped input images
-    '''
-    # Forward the data
-#    if not args.use_depth:# or outsource == 'camvid':
-#        output2 = model(
-#            torch.from_numpy(image.numpy()[:,:,:,::-1].copy()).to(device))
-#    else:
-#        output2 = model(
-#            torch.from_numpy(image.numpy()[:,:,:,::-1].copy()).to(device),
-#            torch.from_numpy(depth.numpy()[:,:,:,::-1].copy()).to(device))
-#
-#    # Calculate the output from the two classification layers
-#    if isinstance(output2, OrderedDict):
-#        pred = output2['out']
-#        pred_aux = output2['aux']
-#    elif model_name == 'espdnetue':
-#        pred = output2[0]
-#        pred_aux = output2[1]
-#
-#    output2 = pred + 0.5 * pred_aux
-#    kld_flip = kld_layer(pred, pred_aux).cpu().data[0].numpy()
-
-    '''
-    Merge the outputs from the original images and the flipped images
-    '''
-#    print(output.shape)
-#    print(kld.shape)
-#    output = 0.5 * ( output + softmax2d(output2).cpu().data[0].numpy()[:,:,::-1] )
-#    kld = 0.5 * ( kld + kld_flip[:,:,::-1] )
-
     return output, kld
 
 def merge_outputs_old(amax_output1, amax_output2, kld1, kld2):
@@ -801,8 +774,15 @@ def merge_outputs_old(amax_output1, amax_output2, kld1, kld2):
 
 def merge_outputs(amax_outputs, seg_classes, thresh=None):
     # If not specified, the label with votes more than half of the number of the outputs is selected
-    if thresh is None:
-        thresh = amax_outputs.shape[0] // 2 + 1
+    num_data = amax_outputs.shape[0]
+    if thresh is None or thresh == 'half':
+        thresh = num_data // 2 + 1
+    elif thresh == 'all':
+        thresh = num_data
+    elif isinstance(thresh, int) and thresh <= num_data:
+        pass 
+    else:
+        thresh = num_data // 2 + 1
     
     # Convert the tuple of ndarrays to an ndarray
     # If there is only one data, explicitly reshape the array
@@ -885,6 +865,7 @@ def generate_pseudo_label(model, device, save_path, round_idx,
     image_path_list = []
     label_path_list = []
     depth_path_list = []
+    class_array = np.zeros(args.num_classes_seg)
     with torch.no_grad():
         ious = 0
         with tqdm(total=len(testloader)) as pbar:
@@ -899,6 +880,9 @@ def generate_pseudo_label(model, device, save_path, round_idx,
 
                 output = output.transpose(1,2,0)
                 amax_output = np.asarray(np.argmax(output, axis=2), dtype=np.uint8)
+
+                for i in range(0, args.num_classes_seg):
+                    class_array[i] += (amax_output == i).sum()
 
                 path_name = name[0]
                 name = name[0].split('/')[-1]
@@ -921,16 +905,13 @@ def generate_pseudo_label(model, device, save_path, round_idx,
 
     update_image_list(tgt_train_lst, image_path_list, label_path_list, depth_path_list)
 
-    batch = iter(testloader).next()
-    image = batch[0].to(device)
-    label = batch[1].long()
-    if args.use_depth:
-        depth = batch[2].to(device)
-        in_training_visualization_img(
-            model, images=image, depths=depth, labels=label,
-            class_encoding=class_encoding, writer=writer, epoch=round_idx, data='cbst_enet/val', device=device)
+    class_array /= class_array.sum() # normalized
+    class_weights = 1/(class_array + 1e-10)
+    class_weights[0] = 0.0
+    print("class_weights : {}".format(class_weights))
+    class_weights = torch.from_numpy(class_weights).float().to(device)
 
-    return tgt_train_lst
+    return tgt_train_lst, class_weights
 
 """Create the model and start the evaluation process."""
 #def generate_pseudo_label_multi_model(model1, model2, device, save_path, round_idx, 
@@ -989,6 +970,7 @@ def generate_pseudo_label_multi_model(model_list, os_data_list, device, save_pat
     image_path_list = []
     label_path_list = []
     depth_path_list = []
+    class_array = np.zeros(args.num_classes_seg)
     with torch.no_grad():
         ious = 0
         with tqdm(total=len(testloader)) as pbar:
@@ -1025,7 +1007,13 @@ def generate_pseudo_label_multi_model(model_list, os_data_list, device, save_pat
                     output_list.append(amax_output)
 
 #                amax_output, kld = merge_outputs(amax_output1, amax_output2, kld1, kld2)
-                amax_output = merge_outputs(np.array(output_list), seg_classes=args.classes)
+                amax_output = merge_outputs(np.array(output_list), 
+                    seg_classes=args.classes, thresh=args.merge_label_policy)
+
+                # Count the number of each class
+                for i in range(0, args.num_classes_seg):
+                    class_array[i] += (amax_output == i).sum()
+
 
     #            label = label_2_id[np.asarray(label.numpy(), dtype=np.uint8)]
                 path_name = name[0]
@@ -1049,30 +1037,17 @@ def generate_pseudo_label_multi_model(model_list, os_data_list, device, save_pat
 
     update_image_list(tgt_train_lst, image_path_list, label_path_list, depth_path_list)
 
-#    with open(tgt_train_lst, 'w') as f:
-#        for idx in range(len(image_path_list)):
-#            if args.use_depth:
-#                f.write("%s,%s,%s\n" % (image_path_list[idx], label_path_list[idx], depth_path_list[idx]))
-#            else:
-#                f.write("%s,%s\n" % (image_path_list[idx], label_path_list[idx]))
-
-    batch = iter(testloader).next()
-    image = batch[0].to(device)
-    label = batch[1].long()
-    if args.use_depth:
-        depth = batch[2].to(device)
-        in_training_visualization_img(
-            model, images=image, depths=depth, labels=label,
-            class_encoding=class_encoding, writer=writer, epoch=round_idx, data='cbst_enet/val', device=device)
-
-#    if args.dataset != 'greenhouse':
-#        label = label_2_id[label.cpu().numpy()]
-#        writer.add_scalar('cbst_enet/val/mean_IoU', np.mean(ious)/len(testloader), round_idx)
-#        util.in_training_visualization_img(model, image, torch.from_numpy(label).long(), class_encoding, writer, round_idx, 'cbst_enet/val', device)
+    class_array /= class_array.sum() # normalized
+    class_weights = 1/(class_array + 1e-10)
+    class_weights[0] = 0.0
+    print("class_weights : {}".format(class_weights))
+    class_weights = torch.from_numpy(class_weights).float().to(device)
 
     logger.info('###### Finish evaluating target domain train set in round {}! Time cost: {:.2f} seconds. ######'.format(round_idx, time.time()-start_eval))
 
-    return tgt_train_lst  # return the dictionary containing all the class-wise confidence vectors
+    # return the dictionary containing all the class-wise confidence vectors,
+    # and the class_weights for loss weighting
+    return tgt_train_lst, class_weights
 
 def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, round_idx, epoch_idx,
           args, logger, metric, class_encoding, writer_idx, class_weights=None, writer=None, add_loss=None):
