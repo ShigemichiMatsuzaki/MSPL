@@ -1,6 +1,6 @@
 # ============================================
-__author__ = "Sachin Mehta"
-__maintainer__ = "Sachin Mehta"
+__author__ = "ShigemichiMatsuzaki"
+__maintainer__ = "ShigemichiMatsuzaki"
 # ============================================
 
 import torch
@@ -9,6 +9,7 @@ from nn_layers.espnet_utils import *
 from nn_layers.efficient_pyramid_pool import EfficientPyrPool
 from nn_layers.efficient_pt import EfficientPWConv
 from nn_layers.espnet_utils import C, CBR
+from nn_layers.fusion_gate import FusionGate
 from model.classification.espnetv2 import EESPNet
 from utilities.print_utils import *
 from torch.nn import functional as F
