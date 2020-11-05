@@ -22,8 +22,6 @@ import transforms as ext_transforms
 from operator import itemgetter
 import copy
 
-import scipy
-from scipy import ndimage
 import math
 from PIL import Image
 import numpy as np
@@ -40,9 +38,6 @@ from loss_fns.segmentation_loss import NIDLoss, UncertaintyWeightedSegmentationL
 ###
 # Matsuzaki
 ###
-#from enet.model import ENet 
-# For visualization using TensorBoardX
-#from tensorboardX import SummaryWriter
 from torch.utils.tensorboard import SummaryWriter
 #from metric.iou import IoU
 from tqdm import tqdm
@@ -138,11 +133,11 @@ def get_arguments():
     ### shared by train & val
     # data
     parser.add_argument('--savedir', type=str, default='./results_segmentation', help='Location to save the results')
-    parser.add_argument('--data-path', type=str, default='', help='dataset path')
+#    parser.add_argument('--data-path', type=str, default='', help='dataset path')
     parser.add_argument("--data-src", type=str, default=DATA_SRC,
                         help="Name of source dataset.")
-    parser.add_argument("--data-src-dir", type=str, default=DATA_SRC_DIRECTORY,
-                        help="Path to the directory containing the source dataset.")
+#    parser.add_argument("--data-src-dir", type=str, default=DATA_SRC_DIRECTORY,
+#                        help="Path to the directory containing the source dataset.")
     parser.add_argument("--data-src-list", type=str, default=DATA_SRC_LIST_PATH,
                         help="Path to the file listing the images&labels in the source dataset.")
     parser.add_argument("--data-tgt-dir", type=str, default=DATA_TGT_DIRECTORY,
@@ -151,8 +146,6 @@ def get_arguments():
                         help="Path to the file listing the images*GT labels in the target train dataset.")
     parser.add_argument("--data-tgt-test-list", type=str, default=DATA_TGT_TEST_LIST_PATH,
                         help="Path to the file listing the images*GT labels in the target test dataset.")
-    parser.add_argument("--num-classes-seg", type=int, default=NUM_CLASSES_SEG,
-                        help="Number of classes to predict (including background).")
     parser.add_argument("--ignore-label", type=int, default=IGNORE_LABEL,
                         help="The index of the label to ignore during the training.")
     # model
@@ -181,8 +174,6 @@ def get_arguments():
                         help="Whether to updates the running means and variances during the training.")
     parser.add_argument("--eval-training", action="store_true",
                         help="Use the saved means and variances, or running means and variances during the evaluation.")
-    parser.add_argument("--random-mirror", action="store_true",
-                        help="Whether to randomly mirror the inputs during the training.")
     parser.add_argument("--random-scale", action="store_true",
                         help="Whether to randomly scale the inputs during the training.")
     parser.add_argument("--train-scale-src", type=str, default=TRAIN_SCALE_SRC,
@@ -218,43 +209,43 @@ def get_arguments():
                         help="Number of rounds for self-training.")
     parser.add_argument("--epr", type=int, default=EPR,
                         help="Number of epochs per round for self-training.")
-    parser.add_argument('--kc-policy', default=KC_POLICY, type=str, dest='kc_policy',
-                        help='The policy to determine kc. "cb" for weighted class-balanced threshold')
-    parser.add_argument('--kc-value', default=KC_VALUE, type=str,
-                        help='The way to determine kc values, either "conf", or "prob".')
+#    parser.add_argument('--kc-policy', default=KC_POLICY, type=str, dest='kc_policy',
+#                        help='The policy to determine kc. "cb" for weighted class-balanced threshold')
+#    parser.add_argument('--kc-value', default=KC_VALUE, type=str,
+#                        help='The way to determine kc values, either "conf", or "prob".')
     parser.add_argument('--ds-rate', default=DS_RATE, type=int,
                         help='The downsampling rate in kc calculation.')
     parser.add_argument('--init-tgt-port', default=INIT_TGT_PORT, type=float, dest='init_tgt_port',
                         help='The initial portion of target to determine kc')
-    parser.add_argument('--max-tgt-port', default=MAX_TGT_PORT, type=float, dest='max_tgt_port',
-                        help='The max portion of target to determine kc')
-    parser.add_argument('--tgt-port-step', default=TGT_PORT_STEP, type=float, dest='tgt_port_step',
-                        help='The portion step in target domain in every round of self-paced self-trained neural network')
-    parser.add_argument('--init-src-port', default=INIT_SRC_PORT, type=float, dest='init_src_port',
-                        help='The initial portion of source portion for self-trained neural network')
-    parser.add_argument('--max-src-port', default=MAX_SRC_PORT, type=float, dest='max_src_port',
-                        help='The max portion of source portion for self-trained neural network')
-    parser.add_argument('--src-port-step', default=SRC_PORT_STEP, type=float, dest='src_port_step',
-                        help='The portion step in source domain in every round of self-paced self-trained neural network')
+#    parser.add_argument('--max-tgt-port', default=MAX_TGT_PORT, type=float, dest='max_tgt_port',
+#                        help='The max portion of target to determine kc')
+#    parser.add_argument('--tgt-port-step', default=TGT_PORT_STEP, type=float, dest='tgt_port_step',
+#                        help='The portion step in target domain in every round of self-paced self-trained neural network')
+#    parser.add_argument('--init-src-port', default=INIT_SRC_PORT, type=float, dest='init_src_port',
+#                        help='The initial portion of source portion for self-trained neural network')
+#    parser.add_argument('--max-src-port', default=MAX_SRC_PORT, type=float, dest='max_src_port',
+#                        help='The max portion of source portion for self-trained neural network')
+#    parser.add_argument('--src-port-step', default=SRC_PORT_STEP, type=float, dest='src_port_step',
+#                        help='The portion step in source domain in every round of self-paced self-trained neural network')
     parser.add_argument('--randseed', default=RANDSEED, type=int,
                         help='The random seed to sample the source dataset.')
-    parser.add_argument("--src-sampling-policy", type=str, default=SRC_SAMPLING_POLICY,
-                        help="The sampling policy on source dataset: 'c' for 'cumulative' and 'r' for replace ")
-    parser.add_argument('--mine-port', default=MINE_PORT, type=float,
-                        help='If a class has a predication portion lower than the mine_port, then mine the patches including the class in self-training.')
-    parser.add_argument('--rare-cls-num', default=RARE_CLS_NUM, type=int,
-                        help='The number of classes to be mined.')
-    parser.add_argument('--mine-chance', default=MINE_CHANCE, type=float,
-                        help='The chance of patch mining.')
-    parser.add_argument('--rm-prob',
-                        help='If remove the probability maps generated in every round.',
-                        default=False, action='store_true')
-    parser.add_argument('--mr-weight-kld', default=MRKLD, type=float, dest='mr_weight_kld',
-                        help='weight of kld model regularization')
-    parser.add_argument('--lr-weight-ent', default=LRENT, type=float, dest='lr_weight_ent',
-                        help='weight of negative entropy label regularization')
-    parser.add_argument('--mr-weight-src', default=MRSRC, type=float, dest='mr_weight_src',
-                        help='weight of regularization in source domain')
+#    parser.add_argument("--src-sampling-policy", type=str, default=SRC_SAMPLING_POLICY,
+#                        help="The sampling policy on source dataset: 'c' for 'cumulative' and 'r' for replace ")
+#    parser.add_argument('--mine-port', default=MINE_PORT, type=float,
+#                        help='If a class has a predication portion lower than the mine_port, then mine the patches including the class in self-training.')
+#    parser.add_argument('--rare-cls-num', default=RARE_CLS_NUM, type=int,
+#                        help='The number of classes to be mined.')
+#    parser.add_argument('--mine-chance', default=MINE_CHANCE, type=float,
+#                        help='The chance of patch mining.')
+#    parser.add_argument('--rm-prob',
+#                        help='If remove the probability maps generated in every round.',
+#                        default=False, action='store_true')
+#    parser.add_argument('--mr-weight-kld', default=MRKLD, type=float, dest='mr_weight_kld',
+#                        help='weight of kld model regularization')
+#    parser.add_argument('--lr-weight-ent', default=LRENT, type=float, dest='lr_weight_ent',
+#                        help='weight of negative entropy label regularization')
+#    parser.add_argument('--mr-weight-src', default=MRSRC, type=float, dest='mr_weight_src',
+#                        help='weight of regularization in source domain')
 
     parser.add_argument('--dataset', default=DATASET, type=str, dest='dataset',
                         help='the name of dataset to train')
@@ -307,6 +298,7 @@ def get_arguments():
                         help='Only use labels that two models agree')
     parser.add_argument('--label-update', default=-1, type=int, help='Update pseudo-label after the specified step')
     parser.add_argument('--merge-label-policy', default='half', help='Policy of merging pseudo-labels from multiple models. ["all", "half", int]')
+    parser.add_argument('--class-weighting', default='flat', help='Policy of class weighting ["normal", "inverse", "flat"]')
 
     return parser.parse_args()
 
@@ -329,40 +321,6 @@ def colorize_mask(mask):
     new_mask = Image.fromarray(mask.astype(np.uint8)).convert('P')
     new_mask.putpalette(palette)
     return new_mask
-
-#def import_os_model(args, os_model, os_weights, os_seg_classes):
-#    print("import_os_model : {}".format(os_weights))
-#    # Import model
-#    if os_model == 'espdnet':
-#        from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
-#        tmp_args = copy.deepcopy(args)
-#        tmp_args.trainable_fusion = False
-#        tmp_args.dense_fuse = False
-#        tmp_args.use_depth  = False
-#        tmp_args.classes = os_seg_classes
-#        tmp_args.dataset = 'camvid'
-#        tmp_args.weights = os_weights
-#        model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
-#    elif os_model == 'espdnetue':
-#        from model.segmentation.espdnet_ue import espdnetue_seg2
-#        tmp_args = copy.deepcopy(args)
-#        tmp_args.trainable_fusion = False
-#        tmp_args.dense_fuse = False
-#        tmp_args.use_depth  = False
-#        tmp_args.classes = os_seg_classes
-#        tmp_args.dataset = 'camvid'
-#        tmp_args.weights = os_weights
-#       
-#        model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
-#    elif os_model == 'deeplabv3':
-#        from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
-#
-#        model_outsource = deeplabv3_resnet101(num_classes=os_seg_classes, aux_loss=True)
-#        # Import pre-trained weights
-#        #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
-#        load_weights(model_outsource, os_weights)
-#
-#    return model_outsource
 
 def main():
     randseed = args.randseed
@@ -421,7 +379,8 @@ def main():
 #        class_weights = np.load('class_weights.npy')# [:4]
 #        class_weights = torch.from_numpy(class_weights).float().to(device)
 
-        seg_classes = len(GREENHOUSE_CLASS_LIST)
+#        seg_classes = len(GREENHOUSE_CLASS_LIST)
+        args.classes = len(GREENHOUSE_CLASS_LIST)
         class_encoding = OrderedDict([
             ('end_of_plant', (0, 255, 0)),
             ('other_part_of_plant', (0, 255, 255)),
@@ -435,21 +394,23 @@ def main():
         for l in range(args.num_classes):
             label_2_id[l] = l
         id_2_label = label_2_id
+    else:
+        return
 
     # Import pretrained model
     if args.model == 'espdnet':
         from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
-        args.classes = seg_classes
+#        args.classes = seg_classes
         model = espdnet_seg_with_pre_rgbd(args, load_entire_weights=True)
 
     elif args.model == 'espdnetue':
         from model.segmentation.espdnet_ue import espdnetue_seg2
-        args.classes = seg_classes
+#        args.classes = seg_classes
         model = espdnetue_seg2(args, load_entire_weights=True, fix_pyr_plane_proj=True)
             
     elif args.model == 'deeplabv3':
         from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
-        model = deeplabv3_resnet101(num_classes=seg_classes, aux_loss=True)
+        model = deeplabv3_resnet101(num_classes=args.classes, aux_loss=True)
 
     # Outsource
     os_model_name_list = [args.os_model1, args.os_model2, args.os_model3]
@@ -492,26 +453,24 @@ def main():
     valid_labels = sorted(set(id_2_label.ravel()))
 
     # portions
-    tgt_portion = args.init_tgt_port
-    src_portion = args.init_src_port
+#    tgt_portion = args.init_tgt_port
+#    src_portion = args.init_src_port
 
     # training crop size
-    h, w = map(int, args.input_size.split(','))
-    input_size = (h, w)
-    lscale_src, hscale_src = map(float, args.train_scale_src.split(','))
-    train_scale_src = (lscale_src, hscale_src)
-    lscale_tgt, hscale_tgt = map(float, args.train_scale_tgt.split(','))
-    train_scale_tgt = (lscale_tgt, hscale_tgt)
+#    h, w = map(int, args.input_size.split(','))
+#    input_size = (h, w)
+#    lscale_src, hscale_src = map(float, args.train_scale_src.split(','))
+#    train_scale_src = (lscale_src, hscale_src)
+#    lscale_tgt, hscale_tgt = map(float, args.train_scale_tgt.split(','))
+#    train_scale_tgt = (lscale_tgt, hscale_tgt)
 
 #    metric = IoU(args.num_classes, ignore_index=args.ignore_label)
     metric = None
     print("Let's start! Hey hey!")
 
-
-
     # 
     # Main loop
-    #s
+    #
     writer_idx = 0
     #class_weights = None
     writer = SummaryWriter(save_path)
@@ -543,16 +502,16 @@ def main():
 
     # Loss functions
     if args.use_uncertainty:
-        criterion = UncertaintyWeightedSegmentationLoss(seg_classes, class_weights, args.ignore_label)
+        criterion = UncertaintyWeightedSegmentationLoss(args.classes, class_weights, args.ignore_label)
     else:
-        criterion = SegmentationLoss(n_classes=seg_classes,
+        criterion = SegmentationLoss(n_classes=args.classes,
                                      device=device, ignore_idx=args.ignore_label,
                                      class_wts=class_weights.to(device))
 
-    criterion_test = SegmentationLoss(n_classes=seg_classes,
+    criterion_test = SegmentationLoss(n_classes=args.classes,
                                      device=device, ignore_idx=args.ignore_label,
                                      class_wts=class_weights.to(device))
-    nid_loss = NIDLoss(image_bin=args.nid_bin, label_bin=seg_classes) if args.use_nid else None
+    nid_loss = NIDLoss(image_bin=args.nid_bin, label_bin=args.classes) if args.use_nid else None
 #    if args.outsource is not None:
 #        tgt_train_lst = val(model_outsource, device, save_path, 
 #                            0, tgt_num, label_2_id, valid_labels,
@@ -564,30 +523,22 @@ def main():
 
     best_miou = 0.0
     for round_idx in range(args.num_rounds):
-        if round_idx == 0:
-#            tgt_train_lst = generate_pseudo_label_multi_model(os_model1, os_model2, device, save_path, round_idx, 
-            pass
-        elif round_idx >= args.label_update and args.label_update >= 0:
+        if round_idx >= args.label_update and args.label_update >= 0:
             tgt_train_lst, class_weights = generate_pseudo_label(model, device, save_path, round_idx, 
                 tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer)
 
-            criterion = UncertaintyWeightedSegmentationLoss(seg_classes, class_weights, args.ignore_label)
+            criterion = UncertaintyWeightedSegmentationLoss(args.classes, class_weights, args.ignore_label)
 
         ########## pseudo-label generation
         if round_idx != args.num_rounds - 1: # If it's not the last round
             # Create the list of training data
-#            src_train_lst, tgt_train_lst = 
-
             ########### model retraining
             # dataset
             epoch_per_round = args.epr # The number of epochs
             # reg weights
-            if args.mr_weight_kld == 0:
-                reg_weight_tgt = 0.0
-            else:  # currently only one kind of model regularizer is supported
-                reg_weight_tgt = args.mr_weight_kld
+            reg_weight_tgt = 0.0
 
-            reg_weight_src = args.mr_weight_src
+            reg_weight_src = 0.0#args.mr_weight_src
 
             # Initial test
             tgt_set = 'test'
@@ -601,25 +552,21 @@ def main():
 
             # dataloader
             #  New dataset (labels) is created every round
-            if args.lr_weight_ent == 0.0:
-                if args.dataset == 'greenhouse':
-                    from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation
-                    from data_loader.segmentation.greenhouse import GreenhouseRGBDStMineDataSet
-                    from data_loader.segmentation.greenhouse import GREENHOUSE_CLASS_LIST
-                    from data_loader.segmentation.camvid import CamVidSegmentation
+            if args.dataset == 'greenhouse':
+                from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation
+                from data_loader.segmentation.greenhouse import GreenhouseRGBDStMineDataSet
+                from data_loader.segmentation.greenhouse import GREENHOUSE_CLASS_LIST
+                from data_loader.segmentation.camvid import CamVidSegmentation
 
-                    # Initialize the class weights 
-                    if class_weights is None:
-                        class_weights = np.ones(args.num_classes_seg)
-                        class_weights = torch.from_numpy(class_weights).float().to(device)
+                # Initialize the class weights 
+                if class_weights is None:
+                    class_weights = np.ones(args.classes) 
+                    class_weights = torch.from_numpy(class_weights).float().to(device)
 
-                    tgttrainset = GreenhouseRGBDSegmentation(
-                        list_name=tgt_train_lst, train=True, 
-                        size=args.crop_size, scale=args.scale, use_depth=args.use_depth)
-
-                else:
-                    pass
-            elif args.lr_weight_ent > 0.0:
+                tgttrainset = GreenhouseRGBDSegmentation(
+                    list_name=tgt_train_lst, train=True, 
+                    size=args.crop_size, scale=args.scale, use_depth=args.use_depth)
+            else:
                 pass
 
             # Create a dataset concatinating the source dataset and the target dataset
@@ -650,7 +597,7 @@ def main():
                     lr=args.learning_rate,
                     weight_decay=args.weight_decay)            
 
-            interp = nn.Upsample(size=input_size, mode='bilinear', align_corners=True)
+            interp = nn.Upsample(size=args.input_size, mode='bilinear', align_corners=True)
 
             logger.info('###### Start model retraining dataset in round {}! ######'.format(round_idx))
 
@@ -720,24 +667,14 @@ def main():
         shutil.rmtree(osp.join(save_path, 'conf'))
 
 def get_output(model, image, model_name='espdnetue', device='cuda'):
-
-#    ## upsampling layer
-#    if version.parse(torch.__version__) >= version.parse('0.4.0'):
-#        interp = nn.Upsample(size=test_image_size, mode='bilinear', align_corners=True)
-#    else:
-#        interp = nn.Upsample(size=test_image_size, mode='bilinear')
-
     kld_layer = PixelwiseKLD()
     softmax2d = nn.Softmax2d()
-    # if args.model == 'ENet':
     '''
     Get outputs from the input images
     '''
     # Forward the data
     if not args.use_depth: #or outsource == 'camvid':
         output2 = model(image.to(device))
-    else:
-        output2 = model(image.to(device), depth.to(device))
 
     # Calculate the output from the two classification layers
     if isinstance(output2, OrderedDict):
@@ -749,28 +686,11 @@ def get_output(model, image, model_name='espdnetue', device='cuda'):
 
     output2 = pred + 0.5 * pred_aux
 
-#    output = softmax2d(interp(output2)).cpu().data[0].numpy()
     output = softmax2d(output2).cpu().data[0].numpy()
 
     kld = kld_layer(pred, pred_aux).cpu().data[0].numpy()
 
     return output, kld
-
-def merge_outputs_old(amax_output1, amax_output2, kld1, kld2):
-#    print(amax_output1.size, kld1.size)
-#    print(amax_output2.size, kld2.size)
-    amax_merge = amax_output1.copy()
-    kld_merge = kld1.copy()
-
-    amax_merge[kld1 < kld2] = amax_output2[kld1 < kld2]
-    kld_merge[kld1 < kld2] = kld2[kld1 < kld2]
-
-    if args.conservative_label:
-        amax_merge[amax_output1 != amax_output2] = 4
-#    port = (kld1 < kld2).sum() / ((kld1 < kld2).sum() + amax_merge.size) * 100
-#    print("{} % of the labels are from kld2".format(port))
-
-    return amax_merge, kld_merge
 
 def merge_outputs(amax_outputs, seg_classes, thresh=None):
     # If not specified, the label with votes more than half of the number of the outputs is selected
@@ -784,12 +704,6 @@ def merge_outputs(amax_outputs, seg_classes, thresh=None):
     else:
         thresh = num_data // 2 + 1
     
-    # Convert the tuple of ndarrays to an ndarray
-    # If there is only one data, explicitly reshape the array
-#    amax_outputs = np.array(amax_outputs)
-#    if len(amax_outputs.shape) == 2:
-#        amax_outputs = amax_outputs.reshape(1, amax_outputs.shape[0], amax_outputs.shape[1])
-
     counts_lst = []
     for class_id in range(args.classes):
         # Count the number of data with class 'class_id' on each pixel
@@ -816,7 +730,7 @@ def update_image_list(tgt_train_lst, image_path_list, label_path_list, depth_pat
 def generate_pseudo_label(model, device, save_path, round_idx, 
         tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer):
     ## scorer
-    scorer = ScoreUpdater(valid_labels, args.num_classes_seg, tgt_num, logger)
+    scorer = ScoreUpdater(valid_labels, args.classes, tgt_num, logger)
     scorer.reset()
     h, w = map(int, args.test_image_size.split(','))
     test_image_size = (h, w)
@@ -828,7 +742,6 @@ def generate_pseudo_label(model, device, save_path, round_idx,
 
         ds = GreenhouseRGBDSegmentation(
             list_name=args.data_tgt_train_list, train=False, use_traversable=args.use_traversable, use_depth=args.use_depth)
-#        testloader = data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
 
     testloader = data.DataLoader(ds, batch_size=1, shuffle=False, pin_memory=args.pin_memory)
 
@@ -856,8 +769,8 @@ def generate_pseudo_label(model, device, save_path, round_idx,
     tgt_train_lst = osp.join(save_path, 'tgt_train.lst')
 
     # saving output data
-    conf_dict = {k: [] for k in range(args.num_classes_seg)}
-    pred_cls_num = np.zeros(args.num_classes_seg)
+    conf_dict = {k: [] for k in range(args.classes)}
+    pred_cls_num = np.zeros(args.classes)
 
     ## evaluation process
     logger.info('###### Start evaluating target domain train set in round {}! ######'.format(round_idx))
@@ -865,7 +778,7 @@ def generate_pseudo_label(model, device, save_path, round_idx,
     image_path_list = []
     label_path_list = []
     depth_path_list = []
-    class_array = np.zeros(args.num_classes_seg)
+    class_array = np.zeros(args.classes)
     with torch.no_grad():
         ious = 0
         with tqdm(total=len(testloader)) as pbar:
@@ -881,7 +794,7 @@ def generate_pseudo_label(model, device, save_path, round_idx,
                 output = output.transpose(1,2,0)
                 amax_output = np.asarray(np.argmax(output, axis=2), dtype=np.uint8)
 
-                for i in range(0, args.num_classes_seg):
+                for i in range(0, args.classes):
                     class_array[i] += (amax_output == i).sum()
 
                 path_name = name[0]
@@ -889,8 +802,6 @@ def generate_pseudo_label(model, device, save_path, round_idx,
                 image_name = name.rsplit('.', 1)[0]
                 
                 # prob
-                #np.save('%s/%s.npy' % (save_prob_path, image_name), output)
-                #np.save('%s/%s.npy' % (save_conf_path, image_name), conf)
                 # trainIDs/vis seg maps
                 amax_output = Image.fromarray(amax_output.astype(np.uint8))
                 # Save the predicted images (+ colorred images for visualization)
@@ -905,20 +816,23 @@ def generate_pseudo_label(model, device, save_path, round_idx,
 
     update_image_list(tgt_train_lst, image_path_list, label_path_list, depth_path_list)
 
-    class_array /= class_array.sum() # normalized
-    class_weights = 1/(class_array + 1e-10)
-    class_weights[0] = 0.0
+    if args.class_weighting == 'normal':
+        class_array /= class_array.sum() # normalized
+        class_weights = 1/(class_array + 1e-10)
+        class_weights[0] = 0.0
+    else:
+        class_weights = np.ones(args.classes)
+
     print("class_weights : {}".format(class_weights))
     class_weights = torch.from_numpy(class_weights).float().to(device)
 
     return tgt_train_lst, class_weights
 
 """Create the model and start the evaluation process."""
-#def generate_pseudo_label_multi_model(model1, model2, device, save_path, round_idx, 
 def generate_pseudo_label_multi_model(model_list, os_data_list, device, save_path, round_idx, 
         tgt_num, label_2_id, valid_labels, args, logger, class_encoding, writer):
     ## scorer
-    scorer = ScoreUpdater(valid_labels, args.num_classes_seg, tgt_num, logger)
+    scorer = ScoreUpdater(valid_labels, args.classes, tgt_num, logger)
     scorer.reset()
     h, w = map(int, args.test_image_size.split(','))
     test_image_size = (h, w)
@@ -950,8 +864,8 @@ def generate_pseudo_label_multi_model(model_list, os_data_list, device, save_pat
     tgt_train_lst = osp.join(save_path, 'tgt_train.lst')
 
     # saving output data
-    conf_dict = {k: [] for k in range(args.num_classes_seg)}
-    pred_cls_num = np.zeros(args.num_classes_seg)
+    conf_dict = {k: [] for k in range(args.classes)}
+    pred_cls_num = np.zeros(args.classes)
 
     ## model for evaluation
     if args.eval_training:
@@ -970,7 +884,7 @@ def generate_pseudo_label_multi_model(model_list, os_data_list, device, save_pat
     image_path_list = []
     label_path_list = []
     depth_path_list = []
-    class_array = np.zeros(args.num_classes_seg)
+    class_array = np.zeros(args.classes)
     with torch.no_grad():
         ious = 0
         with tqdm(total=len(testloader)) as pbar:
@@ -987,12 +901,9 @@ def generate_pseudo_label_multi_model(model_list, os_data_list, device, save_pat
     #                output2, _ = get_output(model2, image)
 
                     output = output.transpose(1,2,0)
-    #                output2 = output2.transpose(1,2,0)
                     amax_output = np.asarray(np.argmax(output, axis=2), dtype=np.uint8)
-    #                amax_output2 = np.asarray(np.argmax(output2, axis=2), dtype=np.uint8)
 
                     # save visualized seg maps & predication prob map
-    #                if args.outsource1 == 'camvid':
                     if os_data == 'camvid':
                         amax_output = id_camvid_to_greenhouse[amax_output]
                     elif os_data == 'cityscapes':
@@ -1000,29 +911,20 @@ def generate_pseudo_label_multi_model(model_list, os_data_list, device, save_pat
                     elif os_data == 'forest':
                         amax_output = id_forest_to_greenhouse[amax_output]
 
-    #                if args.outsource2 == 'camvid':
-    #                    amax_output2 = id_camvid_to_greenhouse[amax_output2]
-    #                else:
-    #                    amax_output2 = id_cityscapes_to_greenhouse[amax_output2]
                     output_list.append(amax_output)
 
-#                amax_output, kld = merge_outputs(amax_output1, amax_output2, kld1, kld2)
                 amax_output = merge_outputs(np.array(output_list), 
                     seg_classes=args.classes, thresh=args.merge_label_policy)
 
                 # Count the number of each class
-                for i in range(0, args.num_classes_seg):
+                for i in range(0, args.classes):
                     class_array[i] += (amax_output == i).sum()
 
-
-    #            label = label_2_id[np.asarray(label.numpy(), dtype=np.uint8)]
                 path_name = name[0]
                 name = name[0].split('/')[-1]
                 image_name = name.rsplit('.', 1)[0]
                 
                 # prob
-                #np.save('%s/%s.npy' % (save_prob_path, image_name), output)
-                #np.save('%s/%s.npy' % (save_conf_path, image_name), conf)
                 # trainIDs/vis seg maps
                 amax_output = Image.fromarray(amax_output.astype(np.uint8))
                 # Save the predicted images (+ colorred images for visualization)
@@ -1037,9 +939,13 @@ def generate_pseudo_label_multi_model(model_list, os_data_list, device, save_pat
 
     update_image_list(tgt_train_lst, image_path_list, label_path_list, depth_path_list)
 
-    class_array /= class_array.sum() # normalized
-    class_weights = 1/(class_array + 1e-10)
-    class_weights[0] = 0.0
+    if args.class_weighting == 'normal':
+        class_array /= class_array.sum() # normalized
+        class_weights = 1/(class_array + 1e-10)
+        class_weights[0] = 0.0
+    else:
+        class_weights = np.ones(args.classes)
+
     print("class_weights : {}".format(class_weights))
     class_weights = torch.from_numpy(class_weights).float().to(device)
 
@@ -1142,16 +1048,21 @@ def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, ro
 #            (iou, miou) = metric.value()
     
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
-    miou = iou[[1, 2, 3]].mean() * 100
+    if args.use_traversable:
+        miou = iou.mean() * 100
+    else:
+        miou = iou[[1, 2, 3]].mean() * 100
 
     # Write summary
-    writer.add_scalar('cbst_enet/train/loss', losses.avg, writer_idx)
-    writer.add_scalar('cbst_enet/train/nid_loss', nid_losses.avg, writer_idx)
-    writer.add_scalar('cbst_enet/train/mean_IoU', miou, writer_idx)
-    writer.add_scalar('cbst_enet/train/traversable_plant_IoU', iou[0], writer_idx)
-    writer.add_scalar('cbst_enet/train/other_plant_mean_IoU', iou[1], writer_idx)
-    writer.add_scalar('cbst_enet/train/learning_rate', optimizer.param_groups[0]['lr'], writer_idx)
-    writer.add_scalar('cbst_enet/train/kld', kld_losses.avg, writer_idx)
+    writer.add_scalar('uest/train/loss', losses.avg, writer_idx)
+    writer.add_scalar('uest/train/nid_loss', nid_losses.avg, writer_idx)
+    writer.add_scalar('uest/train/mean_IoU', miou, writer_idx)
+    writer.add_scalar('uest/train/traversable_plant_IoU', iou[0], writer_idx)
+    writer.add_scalar('uest/train/other_plant_mean_IoU', iou[1], writer_idx)
+    writer.add_scalar('uest/train/artificial_object_mean_IoU', iou[2], writer_idx)
+    writer.add_scalar('uest/train/ground_mean_IoU', iou[3], writer_idx)
+    writer.add_scalar('uest/train/learning_rate', optimizer.param_groups[0]['lr'], writer_idx)
+#    writer.add_scalar('uest/train/kld', kld_losses.avg, writer_idx)
   
     #
     # Investigation of labels
@@ -1161,10 +1072,10 @@ def train(trainloader, model, criterion, device, interp, optimizer, tot_iter, ro
     if args.use_depth: 
         # model, images, depths=None, labels=None, predictions=None, class_encoding=None, writer=None, epoch=None, data=None, device=None
         in_training_visualization_img(model, images=images, depths=depths, labels=labels.long(), class_encoding=class_encoding, 
-            writer=writer, epoch=writer_idx, data='cbst_enet/train', device=device)
+            writer=writer, epoch=writer_idx, data='uest/train', device=device)
     else:
         in_training_visualization_img(model, images=images, labels=labels.long(), class_encoding=class_encoding, 
-            writer=writer, epoch=writer_idx, data='cbst_enet/train', device=device)
+            writer=writer, epoch=writer_idx, data='uest/train', device=device)
 
     
     writer_idx += 1
@@ -1182,7 +1093,7 @@ def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
          label_2_id, valid_labels, args, logger, class_encoding, metric, writer, class_weights, reg_weight=0.0):
     """Create the model and start the evaluation process."""
     ## scorer
-    scorer = ScoreUpdater(valid_labels, args.num_classes_seg, test_num, logger)
+    scorer = ScoreUpdater(valid_labels, args.classes, test_num, logger)
     scorer.reset()
     h, w = map(int, args.test_image_size.split(','))
     test_image_size = (h, w)
@@ -1292,12 +1203,17 @@ def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
             losses.update(loss.item(), images.size(0))
 
     iou = inter_meter.sum / (union_meter.sum + 1e-10)
-    miou = iou[[1, 2, 3]].mean() * 100
+    if args.use_traversable:
+        miou = iou.mean() * 100
+    else:
+        miou = iou[[1, 2, 3]].mean() * 100
  
-    writer.add_scalar('cbst_enet/test/mean_IoU', miou, round_idx)
-    writer.add_scalar('cbst_enet/test/loss', losses.avg, round_idx)
-    writer.add_scalar('cbst_enet/test/traversable_plant_IoU', iou[0], round_idx)
-    writer.add_scalar('cbst_enet/test/other_plant_mean_IoU', iou[1], round_idx)
+    writer.add_scalar('uest/test/mean_IoU', miou, round_idx)
+    writer.add_scalar('uest/test/loss', losses.avg, round_idx)
+    writer.add_scalar('uest/test/traversable_plant_IoU', iou[0], round_idx)
+    writer.add_scalar('uest/test/other_plant_mean_IoU', iou[1], round_idx)
+    writer.add_scalar('uest/test/artificial_object_mean_IoU', iou[2], round_idx)
+    writer.add_scalar('uest/test/ground_mean_IoU', iou[3], round_idx)
     logger.info('###### Finish evaluating in target domain {} set in round {}! Time cost: {:.2f} seconds. ######'.format(
         tgt_set, round_idx, time.time()-start_eval))
 
@@ -1306,154 +1222,12 @@ def test(model, criterion, device, round_idx, tgt_set, test_num, test_list,
     if args.use_depth:
         # model, images, depths=None, labels=None, predictions=None, class_encoding=None, writer=None, epoch=None, data=None, device=None
         in_training_visualization_img(model, images=images, depths=depths, labels=labels, 
-            class_encoding=class_encoding, writer=writer, epoch=round_idx, data='cbst_enet/test', device=device)
+            class_encoding=class_encoding, writer=writer, epoch=round_idx, data='uest/test', device=device)
     else:
         in_training_visualization_img(model, images=images, labels=labels, class_encoding=class_encoding,
-            writer=writer, epoch=round_idx, data='cbst_enet/test', device=device)
+            writer=writer, epoch=round_idx, data='uest/test', device=device)
 
     return miou
-
-def kc_parameters(conf_dict, pred_cls_num, tgt_portion, round_idx, save_stats_path, args, logger):
-    logger.info('###### Start kc generation in round {} ! ######'.format(round_idx))
-    start_kc = time.time()
-    # threshold for each class
-    conf_tot = 0.0
-    #
-    # If all labels are used, cls_sel_size etc. overflow with float32.
-    # Therefore set it to float64
-    #
-    cls_thresh = np.ones(args.num_classes_seg, dtype = np.float64)
-    cls_sel_size = np.zeros(args.num_classes_seg, dtype=np.float64)
-    cls_size = np.zeros(args.num_classes_seg, dtype=np.float64)
-    if args.kc_policy == 'cb' and args.kc_value == 'conf':
-        for idx_cls in np.arange(0, args.num_classes_seg):
-        # Set N_c (the number of pixels predicted as class c)
-            print("kc : {}".format(idx_cls))
-            cls_size[idx_cls] = pred_cls_num[idx_cls]
-            #
-            # conf_dict[idx_cls] : All the confidence values of idx_cls 
-            #
-            if conf_dict[idx_cls] is not None and idx_cls != args.ignore_label:
-                conf_dict[idx_cls].sort(reverse=True) # sort in descending order
-                len_cls = len(conf_dict[idx_cls])
-                #
-                # round(N_c*p) -> The number of pixels to be selected from all idx_cls pixels
-                #
-#                cls_sel_size[idx_cls] = int(math.floor(len_cls * tgt_portion))
-                cls_sel_size[idx_cls] = math.floor(len_cls * tgt_portion)
-                print(math.floor(len_cls * tgt_portion), int(math.floor(len_cls * tgt_portion)))
-                len_cls_thresh = int(cls_sel_size[idx_cls])
-                print(cls_sel_size[idx_cls], int(cls_sel_size[idx_cls]), len_cls_thresh)
-                print(len(conf_dict[idx_cls]))
-
-                if len_cls_thresh != 0:
-                    print(math.floor(len_cls * tgt_portion), int(math.floor(len_cls * tgt_portion)), cls_sel_size[idx_cls], len_cls_thresh)
-                    cls_thresh[idx_cls] = conf_dict[idx_cls][len_cls_thresh-1]
-   
-                conf_dict[idx_cls] = None
-
-    # threshold for mine_id with priority
-    num_mine_id = len(np.nonzero(cls_size / np.sum(cls_size) < args.mine_port)[0])
-    # chose the smallest mine_id
-    id_all = np.argsort(cls_size / np.sum(cls_size))
-    rare_id = id_all[:args.rare_cls_num]
-    mine_id = id_all[:num_mine_id] # sort mine_id in ascending order w.r.t predication portions
-    # save mine ids
-    np.save(save_stats_path + '/rare_id_round' + str(round_idx) + '.npy', rare_id)
-    np.save(save_stats_path + '/mine_id_round' + str(round_idx) + '.npy', mine_id)
-    logger.info('Mining ids : {}! {} rarest ids: {}!'.format(mine_id,args.rare_cls_num,rare_id))
-    # save thresholds
-    np.save(save_stats_path + '/cls_thresh_round' + str(round_idx) + '.npy', cls_thresh)
-    np.save(save_stats_path + '/cls_sel_size_round' + str(round_idx) + '.npy', cls_sel_size)
-    logger.info('###### Finish kc generation in round {}! Time cost: {:.2f} seconds. ######'.format(round_idx,time.time() - start_kc))
-
-    return cls_thresh
-
-def label_selection(
-        cls_thresh, tgt_num, image_name_tgt_list, id_2_label, round_idx, save_prob_path,
-        save_pred_path, save_pseudo_label_path, save_pseudo_label_color_path, save_round_eval_path, args, logger):
-    logger.info('###### Start pseudo-label generation in round {} ! ######'.format(round_idx))
-    start_pl = time.time()
-
-    # For all the data in target set
-    with tqdm(total=tgt_num) as pbar:
-        for idx in tqdm(range(tgt_num)):
-            # Image name without an extension
-            sample_name = image_name_tgt_list[idx].rsplit('.', 1)[0]
-            probmap_path = osp.join(save_prob_path, '{}.npy'.format(sample_name))
-            pred_path = osp.join(save_pred_path, '{}.png'.format(sample_name))
-    
-            # Prediction probabilities saved in val()
-            pred_prob = np.load(probmap_path)
-    
-            # Prediction result. It returns train IDs
-            pred_label_trainIDs = np.asarray(Image.open(pred_path))
-            # Map the predicted train IDs to the corresponding label IDs
-            pred_label_labelIDs = id_2_label[pred_label_trainIDs]
-    
-            # ???
-            pred_label_trainIDs = pred_label_trainIDs.copy()
-            # Normal CBST?
-            if args.kc_policy == 'cb' and args.lr_weight_ent == 0.0:
-                save_wpred_vis_path = osp.join(save_round_eval_path, 'weighted_pred_vis')
-                if not os.path.exists(save_wpred_vis_path):
-                    os.makedirs(save_wpred_vis_path)
-    
-                # Weight the probability of the threshold
-                weighted_prob = pred_prob/cls_thresh
-                weighted_pred_trainIDs = np.asarray(np.argmax(weighted_prob, axis=2), dtype=np.uint8)
-                # save weighted predication
-                wpred_label_col = weighted_pred_trainIDs.copy()
-                wpred_label_col = colorize_mask(wpred_label_col)
-                wpred_label_col.save('%s/%s_color.png' % (save_wpred_vis_path, sample_name))
-                # ID of maximum output
-                weighted_conf = np.amax(weighted_prob, axis=2)
-                pred_label_trainIDs = weighted_pred_trainIDs.copy()
-                pred_label_labelIDs = id_2_label[pred_label_trainIDs]
-                pred_label_labelIDs[weighted_conf < 1] = 4 #0  # '0' in cityscapes indicates 'unlabaled' for labelIDs
-                pred_label_trainIDs[weighted_conf < 1] = 4 # 255 # '255' in cityscapes indicates 'unlabaled' for trainIDs
-            elif args.kc_policy == 'cb' and args.lr_weight_ent > 0.0: # check if cb can be combined with kc_value == conf or prob; also check if \alpha can be larger than 1
-                save_wpred_vis_path = osp.join(save_round_eval_path, 'weighted_pred_vis')
-                if not os.path.exists(save_wpred_vis_path):
-                    os.makedirs(save_wpred_vis_path)
-                # soft pseudo-label
-                soft_pseudo_label = np.power(pred_prob/cls_thresh,1.0/args.lr_weight_ent) # weighted softmax with temperature
-                soft_pseudo_label_sum = soft_pseudo_label.sum(2)
-                soft_pseudo_label = soft_pseudo_label.transpose(2,0,1)/soft_pseudo_label_sum
-                soft_pseudo_label = soft_pseudo_label.transpose(1,2,0).astype(np.float32)
-                np.save('%s/%s.npy' % (save_pseudo_label_path, sample_name), soft_pseudo_label)
-                # hard pseudo-label
-                weighted_pred_trainIDs = np.asarray(np.argmax(soft_pseudo_label, axis=2), dtype=np.uint8)
-                reg_score = np.sum(
-                        -soft_pseudo_label*np.log(pred_prob+1e-32) + args.lr_weight_ent*soft_pseudo_label*np.log(soft_pseudo_label+1e-32),
-                        axis=2)
-                sel_score = np.sum( -soft_pseudo_label*np.log(cls_thresh+1e-32), axis=2)
-                # save weighted predication
-                wpred_label_col = weighted_pred_trainIDs.copy()
-                wpred_label_col = colorize_mask(wpred_label_col)
-                wpred_label_col.save('%s/%s_color.png' % (save_wpred_vis_path, sample_name))
-                pred_label_trainIDs = weighted_pred_trainIDs.copy()
-                pred_label_labelIDs = id_2_label[pred_label_trainIDs]
-                pred_label_labelIDs[reg_score >= sel_score] = 4 #0  # '0' in cityscapes indicates 'unlabaled' for labelIDs
-                pred_label_trainIDs[reg_score >= sel_score] = 4 #255 # '255' in cityscapes indicates 'unlabaled' for trainIDs
-    
-            # pseudo-labels with labelID
-            pseudo_label_labelIDs = pred_label_labelIDs.copy()
-            pseudo_label_trainIDs = pred_label_trainIDs.copy()
-            # save colored pseudo-label map
-            pseudo_label_col = colorize_mask(pseudo_label_trainIDs)
-            pseudo_label_col.save('%s/%s_color.png' % (save_pseudo_label_color_path, sample_name))
-            # save pseudo-label map with label IDs
-            pseudo_label_save = Image.fromarray(pseudo_label_labelIDs.astype(np.uint8))
-            pseudo_label_save.save('%s/%s.png' % (save_pseudo_label_path, sample_name))
-
-    pbar.close()
-
-    # remove probability maps
-    if args.rm_prob:
-        shutil.rmtree(save_prob_path)
-
-    logger.info('###### Finish pseudo-label generation in round {}! Time cost: {:.2f} seconds. ######'.format(round_idx,time.time() - start_pl))
 
 def parse_split_list(list_name):
     image_list = []
@@ -1479,64 +1253,6 @@ def parse_split_list(list_name):
             file_num += 1
 
     return image_list, image_name_list, label_list, depth_list, file_num
-
-
-def savelst_SrcTgt(
-        src_portion, image_tgt_list, depth_tgt_list, image_name_tgt_list,
-        image_src_list, label_src_list, depth_src_list,
-        save_lst_path, save_pseudo_label_path, src_num, tgt_num, randseed, args):
-    src_num_sel = int(np.floor(src_num*src_portion))
-    np.random.seed(randseed)
-    sel_idx = list( np.random.choice(src_num, src_num_sel, replace=False) )
-    sel_src_img_list = list( itemgetter(*sel_idx)(image_src_list) )
-    sel_src_label_list = list(itemgetter(*sel_idx)(label_src_list))
-    if depth_src_list is not None:
-        sel_src_depth_list = list(itemgetter(*sel_idx)(depth_src_list))
-    src_train_lst = osp.join(save_lst_path,'src_train.lst')
-    tgt_train_lst = osp.join(save_lst_path, 'tgt_train.lst')
-
-    # generate src train list
-    with open(src_train_lst, 'w') as f:
-        for idx in range(src_num_sel):
-            if depth_src_list is not None:
-                f.write("%s,%s,%s\n" % (sel_src_img_list[idx], sel_src_label_list[idx], sel_src_depth_list[idx]))
-            else:
-                f.write("%s,%s\n" % (sel_src_img_list[idx], sel_src_label_list[idx]))
-
-    # generate tgt train list
-    if args.lr_weight_ent > 0:
-        with open(tgt_train_lst, 'w') as f:
-            for idx in range(tgt_num):
-                softlabel_name = image_name_tgt_list[idx].rsplit('.', 1)[0] + '.npy'
-                soft_label_tgt_path = osp.join(save_pseudo_label_path, softlabel_name)
-                image_tgt_path = osp.join(save_pseudo_label_path,image_name_tgt_list[idx])
-                f.write("%s\t%s\t%s\n" % (image_tgt_list[idx], image_tgt_path, soft_label_tgt_path))
-    if args.lr_weight_ent == 0:
-        with open(tgt_train_lst, 'w') as f:
-            for idx in range(tgt_num):
-                image_tgt_path = osp.join(save_pseudo_label_path, image_name_tgt_list[idx])
-                if depth_tgt_list is not None:
-                    f.write("%s,%s,%s\n" % (image_tgt_list[idx], image_tgt_path, depth_tgt_list[idx]))
-                else:
-                    f.write("%s,%s\n" % (image_tgt_list[idx], image_tgt_path))
-
-    return src_train_lst, tgt_train_lst, src_num_sel
-
-def load_weights(model, weights):
-    if os.path.isfile(weights):
-        num_gpus = torch.cuda.device_count()
-        device = 'cuda' if num_gpus >= 1 else 'cpu'
-        pretrained_dict = torch.load(weights, map_location=torch.device(device))
-    else:
-        print('Weight file does not exist at {}. Please check. Exiting!!'.format(weights))
-        exit()
-
-    model_dict = model.state_dict()
-    overlap_dict = {k: v for k, v in pretrained_dict.items() 
-                    if k in model_dict}
-
-    model_dict.update(overlap_dict)
-    model.load_state_dict(model_dict)
 
 class ScoreUpdater(object):
     # only IoU are computed. accu, cls_accu, etc are ignored.
@@ -1604,41 +1320,7 @@ def lr_poly(base_lr, iter_n, max_iter, power):
 #    return base_lr * ((1 - float(iter_n) / max_iter) ** (power))
     return lr
 
-def get_1x_lr_params_NOscale(model):
-    """
-    This generator returns all the parameters of the net except for
-    the last classification layer. Note that for each batchnorm layer,
-    requires_grad is set to False in deeplab_resnet.py, therefore this function does not return
-    any batchnorm parameter
-    """
-    b = []
 
-    b.append(model.conv1)
-    b.append(model.bn1)
-    b.append(model.layer1)
-    b.append(model.layer2)
-    b.append(model.layer3)
-    b.append(model.layer4)
-
-    for i in range(len(b)):
-        for j in b[i].modules():
-            jj = 0
-            for k in j.parameters():
-                jj += 1
-                if k.requires_grad:
-                    yield k
-
-def get_10x_lr_params(model):
-    """
-    This generator returns all the parameters for the last layer of the net,
-    which does the classification of pixel into classes
-    """
-    b = []
-    b.append(model.layer5.parameters())
-
-    for j in range(len(b)):
-        for i in b[j]:
-            yield i
 
 def adjust_learning_rate(optimizer, i_iter, tot_iter):
     lr = lr_poly(args.learning_rate, i_iter, tot_iter, args.power)
@@ -1650,12 +1332,12 @@ def transfer_id_to_greenhouse(id_to_greenhouse, output_amax_np):
     return id_to_greenhouse[output_amax_np]
 
 def transfer_output_to_greenhouse(id_to_greenhouse, output_np):
-   # output_greenhouse_np = np.array([]) #args.num_classes_seg
+   # output_greenhouse_np = np.array([]) #args.classes
     output_shape = (1, output_np.shape[1], output_np.shape[2])
 
     # ID 0:traversable plant is not transfered from CamVid
     output_greenhouse_np = np.zeros(output_shape)
-    for gh_class_id in range(1, args.num_classes_seg):
+    for gh_class_id in range(1, args.classes):
         bool_index = id_to_greenhouse == gh_class_id
 #        print(bool_index.shape)
         if bool_index.sum():
