@@ -10,4 +10,4 @@ This repo contains source code of our work on the pseudo-label learning of seman
 By downloading this software, you acknowledge that you agree to the terms and conditions given [here](License).
 
 ## Acknowledgements
-Part of our code is forked from [EdgeNets](https://github.com/sacmehta/EdgeNets). We thank authors for such an amazing work.
+Part of our code is forked from [EdgeNets](https://github.com/sacmehta/EdgeNets). 
