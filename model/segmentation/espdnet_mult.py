@@ -14,41 +14,6 @@ from model.classification.espnetv2 import EESPNet
 from utilities.print_utils import *
 from torch.nn import functional as F
 
-#class FusionGate(nn.Module):
-#    '''
-#    Gate to fuse RGB and depth features
-#    '''
-#    def __init__(self, nchannel):
-#        super().__init__()
-#
-#        # Channel size of input features (must be the same)
-#        self.nchannel = nchannel
-#
-#        self.conv_1x1 = C(nIn=2 * self.nchannel, nOut=self.nchannel, kSize=1)
-#        self.sigmoid  = torch.nn.Sigmoid()
-#        
-#    def forward(self, rgb, depth, naive_fuse=False):
-#        if naive_fuse:
-#            output = rgb + depth
-#        else:
-#            # 1. Concat RGB and depth features
-#            output = torch.cat((rgb, depth), 1)
-#    
-#            # 2. 1x1 convolution
-#            output = self.conv_1x1(output)
-#    
-#            # 3. Sigmoid
-#            weight = self.sigmoid(output)
-#    
-#            # 4. Multiply each features by the yielded weights
-#            size = weight.size()
-#            w_rgb = rgb * weight
-#            w_depth = depth * (torch.ones(size).to('cuda') - weight)
-#    
-#            output = w_rgb + w_depth
-#
-#        return output
-
 class ESPDNetSegCls(nn.Module):
     '''
     This class defines the ESPDNet architecture for the multi task training of Semantic Segmenation and classification
