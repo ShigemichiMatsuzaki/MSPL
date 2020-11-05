@@ -1,7 +1,7 @@
 # ============================================
-__author__ = "Sachin Mehta"
+__author__ = "ShigemichiMatsuzaki"
 __license__ = "MIT"
-__maintainer__ = "Sachin Mehta"
+__maintainer__ = "ShigemichiMatsuzaki"
 # ============================================
 
 import argparse
