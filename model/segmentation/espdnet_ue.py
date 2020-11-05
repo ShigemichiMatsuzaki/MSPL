@@ -54,12 +54,14 @@ class FusionGate(nn.Module):
 
         return output
 
-class ESPDNetSegmentation(nn.Module):
+class ESPDNetwithUncertaintyEstimation(nn.Module):
     '''
-    This class defines the ESPDNet architecture for the Semantic Segmenation
-    '''
+    This class defines the ESPDNet architecture for the Semantic Segmenation with uncertainty estimation
 
-    def __init__(self, args, classes=21, dataset='pascal', dense_fuse=False, trainable_fusion=True):
+    aux_layer : A number of the layer from which the auxiliary branch is made.
+      0: bu_dec_l1, 1: bu_dec_l2, 2: bu_dec_l3
+    '''
+    def __init__(self, args, classes=21, dataset='pascal', dense_fuse=False, trainable_fusion=True, aux_layer=2, fix_pyr_plane_proj=False):
         super().__init__()
 
         # =============================================================
@@ -89,43 +91,6 @@ class ESPDNetSegmentation(nn.Module):
         self.fusion_gate_level3 = FusionGate(nchannel=256, is_trainable=trainable_fusion)
         self.fusion_gate_level4 = FusionGate(nchannel=512, is_trainable=trainable_fusion)
 
-        # Layer 1
-#        self.depth_encoder_level1 = nn.Sequential(
-#                                            CBR(nIn=1, nOut=32, kSize=3, stride=2), # Input: 3, Ouput: 16, kernel: 3
-#                                            CBR(nIn=32, nOut=32, kSize=3), # Input: 3, Ouput: 16, kernel: 3
-#                                      )
-#
-#        # Level 2
-#        self.depth_encoder_level2 = nn.Sequential(
-##                                            C(nIn=32, nOut=128, kSize=1), # Pixel-wise conv
-##                                            CBR(nIn=128, nOut=128, kSize=3, stride=2, groups=128) # Depth-wise conv
-#                                            CBR(nIn=32, nOut=128, kSize=3, stride=2),  # Downsample
-#                                            CBR(nIn=128, nOut=128, kSize=3),
-#                                            CBR(nIn=128, nOut=128, kSize=3) 
-#                                      )
-#
-#        # Level 3
-#        self.depth_encoder_level3 = nn.Sequential(
-##                                            C(nIn=128, nOut=256, kSize=1), # Pixel-wise conv
-##                                            CBR(nIn=256, nOut=256, kSize=3, groups=256)             # Depth-wise conv
-#                                            CBR(nIn=128, nOut=256, kSize=3, stride=2),
-#                                            CBR(nIn=256, nOut=256, kSize=3),
-#                                            CBR(nIn=256, nOut=256, kSize=3),
-#                                            CBR(nIn=256, nOut=256, kSize=3)
-#                                             
-#                                      )
-#
-#        # Level 4
-#        self.depth_encoder_level4 = nn.Sequential(
-#                                            CBR(nIn=256, nOut=512, kSize=3, stride=2), # Pixel-wise conv
-#                                            CBR(nIn=512, nOut=512, kSize=3),
-#                                            CBR(nIn=512, nOut=512, kSize=3),
-#                                            CBR(nIn=512, nOut=512, kSize=3)
-#                                      )
-
-
-          # 112 L1
-
         #=============================================================
         #                   SEGMENTATION NETWORK
         #=============================================================
@@ -136,11 +101,15 @@ class ESPDNetSegmentation(nn.Module):
             'greenhouse': 16,
             'ishihara': 16,
             'sun': 16,
-            'camvid': 16
+            'camvid': 16, 
+            'forest': 16
         }
         base_dec_planes = dec_feat_dict[dataset]
         dec_planes = [4*base_dec_planes, 3*base_dec_planes, 2*base_dec_planes, classes]
-        pyr_plane_proj = min(classes //2, base_dec_planes)
+        if fix_pyr_plane_proj:
+            pyr_plane_proj = base_dec_planes
+        else:
+            pyr_plane_proj = min(classes //2, base_dec_planes)
 
         self.bu_dec_l1 = EfficientPyrPool(in_planes=config[3], proj_planes=pyr_plane_proj,
                                           out_planes=dec_planes[0])
@@ -164,6 +133,12 @@ class ESPDNetSegmentation(nn.Module):
         self.bu_br_l4 = nn.Sequential(nn.BatchNorm2d(dec_planes[2]),
                                       nn.PReLU(dec_planes[2])
                                       )
+
+        # Auxiliary branch
+        self.aux_layer = aux_layer
+        if aux_layer >= 0 and aux_layer < 3:
+            self.aux_decoder = EfficientPyrPool(in_planes=dec_planes[aux_layer], proj_planes=pyr_plane_proj,
+                                                out_planes=dec_planes[3], last_layer_br=False)
 
         #self.upsample =  nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
@@ -209,6 +184,17 @@ class ESPDNetSegmentation(nn.Module):
                             yield p
 
     def get_segment_params(self):
+        modules_seg = [self.bu_dec_l1, self.bu_dec_l2, self.bu_dec_l3, self.bu_dec_l4,
+                       self.merge_enc_dec_l4, self.merge_enc_dec_l3, self.merge_enc_dec_l2,
+                       self.bu_br_l4, self.bu_br_l3, self.bu_br_l2]
+        for i in range(len(modules_seg)):
+            for m in modules_seg[i].named_modules():
+                if isinstance(m[1], nn.Conv2d) or isinstance(m[1], nn.BatchNorm2d) or isinstance(m[1], nn.PReLU):
+                    for p in m[1].parameters():
+                        if p.requires_grad:
+                            yield p
+    
+    def get_classification_layer_params(self):
         modules_seg = [self.bu_dec_l1, self.bu_dec_l2, self.bu_dec_l3, self.bu_dec_l4,
                        self.merge_enc_dec_l4, self.merge_enc_dec_l3, self.merge_enc_dec_l2,
                        self.bu_br_l4, self.bu_br_l3, self.bu_br_l2]
@@ -323,6 +309,8 @@ class ESPDNetSegmentation(nn.Module):
 
         # bottom-up decoding
         bu_out = self.bu_dec_l1(enc_out_l4)
+        if self.aux_layer == 0:
+            aux_out = self.aux_decoder(bu_out)
 
         # Decoding block
         bu_out = self.upsample(bu_out)
@@ -330,6 +318,8 @@ class ESPDNetSegmentation(nn.Module):
         bu_out = enc_out_l3_proj + bu_out
         bu_out = self.bu_br_l2(bu_out)
         bu_out = self.bu_dec_l2(bu_out)
+        if self.aux_layer == 1:
+            aux_out = self.aux_decoder(bu_out)
 
         #decoding block
         bu_out = self.upsample(bu_out)
@@ -337,6 +327,8 @@ class ESPDNetSegmentation(nn.Module):
         bu_out = enc_out_l2_proj + bu_out
         bu_out = self.bu_br_l3(bu_out)
         bu_out = self.bu_dec_l3(bu_out)
+        if self.aux_layer == 2:
+            aux_out = self.aux_decoder(bu_out)
 
         # decoding block
         bu_out = self.upsample(bu_out)
@@ -345,19 +337,21 @@ class ESPDNetSegmentation(nn.Module):
         bu_out = self.bu_br_l4(bu_out)
         bu_out  = self.bu_dec_l4(bu_out)
 
-        return F.interpolate(bu_out, size=x_size, mode='bilinear', align_corners=True)
+        return (F.interpolate(bu_out, size=x_size, mode='bilinear', align_corners=True), 
+                F.interpolate(aux_out, size=x_size, mode='bilinear', align_corners=True))
 
-
-def espdnet_seg(args):
+def espdnetue_seg2(args, load_entire_weights=False, fix_pyr_plane_proj=False):
     classes = args.classes
     scale=args.s
     weights = args.weights
+    print(weights)
     #depth_weights = 'results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200401-114045/espnetv2_2.0_480_checkpoint.pth.tar'
     depth_weights = weights
     dataset=args.dataset
     trainable_fusion=args.trainable_fusion
     dense_fuse=args.dense_fuse
-    model = ESPDNetSegmentation(args, classes=classes, dataset=dataset, dense_fuse=dense_fuse, trainable_fusion=trainable_fusion)
+    model = ESPDNetwithUncertaintyEstimation(args, classes=classes, dataset=dataset, dense_fuse=dense_fuse,
+                                             trainable_fusion=trainable_fusion, fix_pyr_plane_proj=fix_pyr_plane_proj)
     if weights:
         import os
         if os.path.isfile(weights):
@@ -370,17 +364,35 @@ def espdnet_seg(args):
 
         print_info_message('Loading pretrained basenet model weights')
         # Load pretrained weights for RGB
-        basenet_dict = model.base_net.state_dict()
         model_dict = model.state_dict()
-        overlap_dict = {k: v for k, v in pretrained_dict.items() if k in basenet_dict}
+        if load_entire_weights:
+#            for k, v in pretrained_dict.items():
+#                if model_dict[k].size() == v.size():
+#                    overlap_dict[k] = v
+#                else:
+#                    print(k)
+            overlap_dict = {k: v for k, v in pretrained_dict.items() 
+                            if k in model_dict and model_dict[k].size() == v.size()}
+            no_overlap_dict = {k: v for k, v in pretrained_dict.items() 
+                               if k not in model_dict or model_dict[k].size() != v.size()}
+            print(no_overlap_dict.keys())
+        else:
+            basenet_dict = model.base_net.state_dict()
+            overlap_dict = {k.replace("base_net.", ""): v for k, v in pretrained_dict.items() 
+                            if k.replace("base_net.", "") in basenet_dict}
 
         if len(overlap_dict) == 0:
             print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
             exit()
 
         print_info_message('{:.2f} % of weights copied from basenet to segnet'.format(len(overlap_dict) * 1.0/len(model_dict) * 100))
-        basenet_dict.update(overlap_dict)
-        model.base_net.load_state_dict(basenet_dict)
+        if load_entire_weights:
+            model_dict.update(overlap_dict)
+            model.load_state_dict(model_dict)
+        else:
+            basenet_dict.update(overlap_dict)
+            model.base_net.load_state_dict(basenet_dict)
+
         print_info_message('Pretrained basenet model loaded!!')
     else:
         print_warning_message('Training from scratch!!')
@@ -397,17 +409,7 @@ def espdnet_seg(args):
 
         # Load pretrained weights for RGB
         dbasenet_dict = model.depth_base_net.state_dict()
-#        print(list(pretrained_dict['state_dict'].keys())[0].lstrip('base_net.base_net.'))
-#        print(list(dbasenet_dict.keys())[0])
-#        overlap_dict = {k.lstrip("base_net.base_net."): v for k, v in pretrained_dict['state_dict'].items() if k.lstrip('base_net.base_net.') in dbasenet_dict and k.lstrip("base_net.base_net.") != 'level1.conv.weight'}
-        overlap_dict = {k: v for k, v in pretrained_dict.items() if k in dbasenet_dict}
-        # overlap_dict = {k.lstrip("base_net.base_net."): v for k, v in pretrained_dict['state_dict'].items() if k.lstrip('base_net.base_net.') in dbasenet_dict}
-
-#        for k, v in pretrained_dict['state_dict'].items():
-#            key = k.lstrip('base_net.base_net')
-#            print(key)
-#            if key in dbasenet_dict:
-#                overlap_dict.update({key: v})
+        overlap_dict = {k.lstrip('base_net.'): v for k, v in pretrained_dict.items() if k.lstrip('base_net.') in dbasenet_dict}
         overlap_dict['level1.conv.weight'] = torch.mean(overlap_dict['level1.conv.weight'], dim=1, keepdim=True)
         if len(overlap_dict) == 0:
             print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
@@ -418,15 +420,17 @@ def espdnet_seg(args):
 
     return model
 
-def espdnet_seg_with_pre_rgbd(args, ignore_layers=[], load_entire_weights=False):
+def espdnetue_seg(args, load_entire_weights=False):
     classes = args.classes
     scale=args.s
     weights = args.weights
+    print(weights)
     #depth_weights = 'results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200401-114045/espnetv2_2.0_480_checkpoint.pth.tar'
+    depth_weights = weights
     dataset=args.dataset
     trainable_fusion=args.trainable_fusion
     dense_fuse=args.dense_fuse
-    model = ESPDNetSegmentation(args, classes=classes, dataset=dataset, dense_fuse=dense_fuse, trainable_fusion=trainable_fusion)
+    model = ESPDNetwithUncertaintyEstimation(args, classes=classes, dataset=dataset, dense_fuse=dense_fuse, trainable_fusion=trainable_fusion)
     if weights:
         import os
         if os.path.isfile(weights):
@@ -438,23 +442,52 @@ def espdnet_seg_with_pre_rgbd(args, ignore_layers=[], load_entire_weights=False)
             exit()
 
         print_info_message('Loading pretrained basenet model weights')
+        # Load pretrained weights for RGB
         model_dict = model.state_dict()
-
-        overlap_dict = {k: v 
-            for k, v in pretrained_dict.items()
-            if (k in model_dict) and not k in ignore_layers
-            and ('base_net' in k or load_entire_weights)}
+        if load_entire_weights:
+            overlap_dict = {k: v for k, v in pretrained_dict.items() 
+                            if k in model_dict}
+        else:
+            basenet_dict = model.base_net.state_dict()
+            overlap_dict = {k.replace("base_net.", ""): v for k, v in pretrained_dict.items() 
+                            if k.replace("base_net.", "") in basenet_dict}
 
         if len(overlap_dict) == 0:
             print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
             exit()
 
         print_info_message('{:.2f} % of weights copied from basenet to segnet'.format(len(overlap_dict) * 1.0/len(model_dict) * 100))
-        model_dict.update(overlap_dict)
-        model.load_state_dict(model_dict)
+        if load_entire_weights:
+            model_dict.update(overlap_dict)
+            model.load_state_dict(model_dict)
+        else:
+            basenet_dict.update(overlap_dict)
+            model.base_net.load_state_dict(basenet_dict)
+
         print_info_message('Pretrained basenet model loaded!!')
     else:
         print_warning_message('Training from scratch!!')
+
+    if depth_weights:
+        import os
+        if os.path.isfile(depth_weights):
+            num_gpus = torch.cuda.device_count()
+            device = 'cuda' if num_gpus >= 1 else 'cpu'
+            pretrained_dict = torch.load(depth_weights, map_location=torch.device(device))
+        else:
+            print_error_message('Weight file does not exist at {}. Please check. Exiting!!'.format(depth_weights))
+            exit()
+
+        # Load pretrained weights for RGB
+        dbasenet_dict = model.depth_base_net.state_dict()
+        overlap_dict = {k.lstrip('base_net.'): v for k, v in pretrained_dict.items() if k.lstrip('base_net.') in dbasenet_dict}
+        overlap_dict['level1.conv.weight'] = torch.mean(overlap_dict['level1.conv.weight'], dim=1, keepdim=True)
+        if len(overlap_dict) == 0:
+            print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
+            exit()
+        dbasenet_dict.update(overlap_dict)
+        model.depth_base_net.load_state_dict(dbasenet_dict)
+        print_info_message('Pretrained depth basenet model loaded!!')
 
     return model
 
@@ -463,19 +496,21 @@ if __name__ == "__main__":
     from utilities.utils import compute_flops, model_parameters
     import torch
     import argparse
-
-    parser = argparse.ArgumentParser(description='Testing')
-    args = parser.parse_args()
-
-    args.classes = 21
+#    parser = argparse.ArgumentParser(description='Testing')
+#    args = parser.parse_args()
+#
+    args.classes = 5
     args.s = 2.0
-    args.weights='../classification/model_zoo/espnet/espnetv2_s_2.0_imagenet_224x224.pth'
-    args.dataset='pascal'
-
-    input = torch.Tensor(1, 3, 384, 384)
-    model = espdnet_seg(args)
-    from utilities.utils import compute_flops, model_parameters
-    print_info_message(compute_flops(model, input=input))
-    print_info_message(model_parameters(model))
-    out = model(input)
-    print_info_message(out.size())
+    args.weights='/tmp/runs/results_segmentation/model_espdnet_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200513-172834/espdnet_2.0_480_best.pth'
+    args.dataset='camvid'
+    args.trainable_fusion = False
+    args.dense_fuse = False
+    args.use_depth = False
+#
+#    input = torch.Tensor(1, 3, 384, 384)
+    model = espdnet_seg(args, True)
+#    from utilities.utils import compute_flops, model_parameters
+#    print_info_message(compute_flops(model, input=input))
+#    print_info_message(model_parameters(model))
+#    out = model(input)
+#    print_info_message(out.size())

@@ -14,7 +14,10 @@ class MIOU(object):
         if isinstance(output, tuple):
             output = output[0]
 
-        _, pred = torch.max(output, 1)
+        if len(output.size()) == 4: # Case of raw outputs
+            _, pred = torch.max(output, 1)
+        else:                               # Case of argmax
+            pred = output
 
         # histc in torch is implemented only for cpu tensors, so move your tensors to CPU
         if pred.device == torch.device('cuda'):

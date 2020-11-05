@@ -6,6 +6,9 @@ import numpy as np
 import torchvision
 import torchvision.transforms as transforms
 from collections import OrderedDict
+import logging
+from loss_fns.segmentation_loss import PixelwiseKLD
+import copy
 
 #============================================
 __author__ = "Sachin Mehta"
@@ -70,20 +73,47 @@ def compute_flops(model, input=None):
     flops = flops / 1e6 / 2
     return flops
 
-def in_training_visualization_img(model, images, depths=None, labels=None, class_encoding=None, writer=None, epoch=None, data=None, device=None):
+def in_training_visualization_img(model, images, depths=None, labels=None, predictions=None, class_encoding=None, writer=None, epoch=None, data=None, device=None):
     # Make predictions!
-    model.eval()
-    with torch.no_grad():
-        if depths is not None:
-            predictions = model(images, depths)
-        else:
-            predictions = model(images)
+    if predictions is None:
+        model.eval()
+        with torch.no_grad():
+            if depths is not None:
+                print("Eval. depths:{}".format(depths.size()))
+                predictions = model(images, depths)
+            else:
+                predictions = model(images)
     
     # Predictions is one-hot encoded with "num_classes" channels.
     # Convert it to a single int using the indices where the maximum (1) occurs
-    _, predictions = torch.max(predictions.data, 1)
-    
-       # label_to_rgb : Sequence of processes
+    if type(predictions) is tuple:
+        kld_layer = PixelwiseKLD()
+        f_pred = predictions[0] + 0.5 * predictions[1]
+        kld = kld_layer(predictions[0], predictions[1])
+        kld = (-kld / torch.max(kld).item() + 1)# * 255# Scale to [0, 255]
+        kld = torch.reshape(kld, (kld.size(0), 1, kld.size(1), kld.size(2)))
+        kld = torchvision.utils.make_grid(kld.cpu()).numpy()
+        writer.add_image(data + '/kld', kld, epoch)
+        _, predictions = torch.max(f_pred, dim=1)
+    elif isinstance(predictions, OrderedDict):
+        f_pred = predictions['out']
+        if len(predictions) == 2:
+            kld_layer = PixelwiseKLD()
+            f_pred += 0.5 * predictions['aux']
+            kld = kld_layer(predictions['out'], predictions['aux'])
+            kld = (-kld / torch.max(kld).item() + 1)# * 255# Scale to [0, 255]
+            kld = torch.reshape(kld, (kld.size(0), 1, kld.size(1), kld.size(2)))
+            kld = torchvision.utils.make_grid(kld.cpu()).numpy()
+            writer.add_image(data + '/kld', kld, epoch)
+
+        _, predictions = torch.max(f_pred, dim=1)       
+    elif len(predictions.size()) == 3:
+        pass
+    else:
+        _, predictions = torch.max(predictions.data, dim=1)
+
+
+    # label_to_rgb : Sequence of processes
     #  1. LongTensorToRGBPIL(tensor) -> PIL Image : Convert label tensor to color map
     #  2. transforms.ToTensor() -> Tensor : Convert PIL Image to a tensor
     label_to_rgb = transforms.Compose([
@@ -93,7 +123,7 @@ def in_training_visualization_img(model, images, depths=None, labels=None, class
 
     # Do transformation of label tensor and prediction tensor
     color_train       = batch_transform(labels.data.cpu(), label_to_rgb)
-    color_predictions = batch_transform(predictions.cpu(), label_to_rgb)
+    color_predictions = batch_transform(predictions.data.cpu(), label_to_rgb)
 
     write_summary_batch(images.data.cpu(), color_train, color_predictions, writer, epoch, data)
 
@@ -204,12 +234,75 @@ class LongTensorToRGBPIL(object):
 #        return ToPILImage()(color_tensor)
         return color_tensor
 
-def calc_cls_class_weight(data_loader, class_num):
+def calc_cls_class_weight(data_loader, class_num, inverted=False):
     class_array = np.zeros(class_num).astype(np.float32)
 
     for n, batch in enumerate(data_loader):
-        cls_ids = batch[3].numpy()
+        cls_ids = batch[1].numpy()
         for i in range(0, class_num):
             class_array[i] += (cls_ids == i).sum()
 
-    return class_array / class_array.sum()
+    class_array /= class_array.sum() # normalized
+#    class_array = 1 - class_array 
+
+    if inverted:
+        return np.exp(class_array)/np.sum(np.exp(class_array)) #/ class_array.sum()
+    else:
+        return 1/(class_array + 1e-10)
+
+def set_logger(output_dir=None, log_file=None, debug=False):
+    head = '%(asctime)-15s Host %(message)s'
+    logger_level = logging.INFO if not debug else logging.DEBUG
+    if all((output_dir, log_file)) and len(log_file) > 0:
+        logger = logging.getLogger()
+        log_path = os.path.join(output_dir, log_file)
+        handler = logging.FileHandler(log_path)
+        formatter = logging.Formatter(head)
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logger_level)
+    else:
+        logging.basicConfig(level=logger_level, format=head)
+        logger = logging.getLogger()
+    return logger
+
+def import_os_model(args, os_model, os_weights, os_seg_classes):
+    print("import_os_model : {}".format(os_weights))
+    # Import model
+    print(os_model)
+    if os_model == 'espdnet':
+        from model.segmentation.espdnet import espdnet_seg_with_pre_rgbd
+        tmp_args = copy.deepcopy(args)
+        tmp_args.trainable_fusion = False
+        tmp_args.dense_fuse = False
+        tmp_args.use_depth  = False
+        tmp_args.classes = os_seg_classes
+        tmp_args.dataset = 'camvid'
+        tmp_args.weights = os_weights
+        model_outsource = espdnet_seg_with_pre_rgbd(tmp_args, load_entire_weights=True)
+    elif os_model == 'espdnetue':
+        from model.segmentation.espdnet_ue import espdnetue_seg2
+        tmp_args = copy.deepcopy(args)
+        tmp_args.trainable_fusion = False
+        tmp_args.dense_fuse = False
+        tmp_args.use_depth  = False
+        tmp_args.classes = os_seg_classes
+        tmp_args.dataset = 'camvid'
+        tmp_args.weights = os_weights
+       
+        model_outsource = espdnetue_seg2(tmp_args, load_entire_weights=True, fix_pyr_plane_proj=True)
+    elif os_model == 'deeplabv3':
+        from torchvision.models.segmentation.segmentation import deeplabv3_resnet101
+
+        model_outsource = deeplabv3_resnet101(num_classes=os_seg_classes, aux_loss=True)
+        # Import pre-trained weights
+        #/tmp/runs/model_deeplabv3_camvid/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200710-185848/
+        load_weights(model_outsource, os_weights)
+    elif os_model == 'unet':
+        from model.segmentation.unet import unet_seg
+        model_outsource = unet_seg(num_classes=os_seg_classes, weights=os_weights)
+
+    return model_outsource

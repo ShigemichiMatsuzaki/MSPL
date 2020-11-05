@@ -1,15 +1,17 @@
-CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
-  --dataset sun \
-  --data-path ./vision_datasets/sun_rgbd/ \
-  --batch-size 35 \
-  --crop-size 320 240 \
-  --ignore-idx 255 \
+CUDA_VISIBLE_DEVICES=1 python train_segmentation.py \
+  --dataset camvid \
+  --data-path ./vision_datasets/camvid/ \
+  --savedir /tmp/runs/results_segmentation/ \
+  --batch-size 32 \
+  --crop-size 480 288 \
+  --ignore-idx 4 \
   --model espdnet \
   --s 2.0 \
-  --lr 0.010 \
+  --lr 0.009 \
   --scheduler hybrid \
   --clr-max 61 \
-  --epochs 500
+  --epochs 100 \
+  --label-conversion true
 
 # CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
 #   --dataset greenhouse \

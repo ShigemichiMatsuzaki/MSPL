@@ -1,14 +1,16 @@
 CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \
-  --dataset sun \
-  --data-path ./vision_datasets/sun_rgbd/ \
-  --batch-size 35 \
-  --crop-size 320 240 \
+  --dataset city \
+  --data-path ./vision_datasets/cityscapes/ \
+  --savedir /tmp/runs/ \
+  --batch-size 7 \
+  --crop-size 512 256 \
   --ignore-idx 255 \
-  --model espdnet \
+  --model deeplabv3 \
   --s 2.0 \
-  --lr 0.010 \
+  --lr 0.0009 \
   --scheduler hybrid \
   --clr-max 61 \
+  --use-aux true \
   --epochs 500
 
 # CUDA_VISIBLE_DEVICES=0 python train_segmentation.py \

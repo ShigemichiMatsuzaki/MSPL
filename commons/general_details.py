@@ -11,8 +11,8 @@ classification_exp_choices = ['main', 'ablation']
 
 # segmentation related details
 segmentation_schedulers = ['poly', 'fixed', 'clr', 'linear', 'hybrid']
-segmentation_datasets = ['pascal', 'city', 'greenhouse', 'ishihara', 'sun']
-segmentation_models = ['espnetv2', 'dicenet', 'espdnet']
+segmentation_datasets = ['pascal', 'city', 'greenhouse', 'ishihara', 'sun', 'camvid', 'forest']
+segmentation_models = ['espnetv2', 'dicenet', 'espdnet', 'espdnetue', 'deeplabv3', 'unet']
 segmentation_loss_fns = ['ce', 'bce']
 
 
