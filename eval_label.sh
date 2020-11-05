@@ -46,29 +46,43 @@ val_lists=(
   $val_list_c
 )
 
-# CamVid
-for val in "${val_lists[@]}"; 
-do
 CUDA_VISIBLE_DEVICES=0 python eval_label.py \
   --data-path ./vision_datasets/camvid/ \
-  --savedir /tmp/runs/eval_label \
-  --val-list $val \
+  --savedir /tmp/runs/uest/for-paper/eval_label \
+  --val-list val_greenhouse.lst \
   --batch-size 24 \
   --crop-size 480 256 \
-  --dataset $outsource1 \
+  --dataset greenhouse \
   --model espdnetue \
   --output-image true \
-  --os-model1 $os_model1 \
-  --outsource1 $outsource1\
-  --os-weights1 $os_weights1
-done
+  --os-model1 espdnetue \
+  --outsource1 greenhouse \
+  --os-weights1 /tmp/runs/model_espdnetue_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_rgb/20200915-220819/espdnetue_2.0_480_best.pth
 
-# Cityscapes
+
+# CamVid
 #for val in "${val_lists[@]}"; 
 #do
 #CUDA_VISIBLE_DEVICES=0 python eval_label.py \
 #  --data-path ./vision_datasets/camvid/ \
-#  --savedir /tmp/runs/eval_label \
+#  --savedir /tmp/runs/uest/for-paper/eval_label \
+#  --val-list $val \
+#  --batch-size 24 \
+#  --crop-size 480 256 \
+#  --dataset $outsource1 \
+#  --model espdnetue \
+#  --output-image true \
+#  --os-model1 $os_model1 \
+#  --outsource1 $outsource1\
+#  --os-weights1 $os_weights1
+#done
+#
+## Cityscapes
+#for val in "${val_lists[@]}"; 
+#do
+#CUDA_VISIBLE_DEVICES=0 python eval_label.py \
+#  --data-path ./vision_datasets/camvid/ \
+#  --savedir /tmp/runs/uest/for-paper/eval_label \
 #  --val-list $val \
 #  --batch-size 24 \
 #  --crop-size 480 256 \
@@ -85,7 +99,7 @@ done
 #do
 #CUDA_VISIBLE_DEVICES=0 python eval_label.py \
 #  --data-path ./vision_datasets/camvid/ \
-#  --savedir /tmp/runs/eval_label \
+#  --savedir /tmp/runs/uest/for-paper/eval_label \
 #  --val-list $val \
 #  --batch-size 24 \
 #  --crop-size 480 256 \

@@ -243,11 +243,8 @@ def train_seg_ue(model, dataset_loader, optimizer, criterion, num_classes,
     else:
         miou = iou[[1, 2, 3]].mean() * 100
 #        miou = iou.mean() * 100
-    print(inter_meter.sum)
-    print(union_meter.sum)
-    print(inter_meter.sum / (union_meter.sum + 1e-10) * 100)
 
-    return miou, losses.avg
+    return iou, losses.avg
 
 def val_seg_ue(model, dataset_loader, criterion=None, num_classes=21, 
                device='cuda', use_depth=False, add_criterion=None, greenhouse_use_trav=False):
@@ -322,7 +319,7 @@ def val_seg_ue(model, dataset_loader, criterion=None, num_classes=21,
 
     print_info_message('Mean IoU: {0:.2f}'.format(miou))
     if criterion:
-        return miou, losses.avg
+        return iou, losses.avg
     else:
-        return miou, 0
+        return iou, 0
 

@@ -242,9 +242,12 @@ def main(args):
 
             print("Batch {}/{} finished".format(i+1, len(val_loader)))
     
-    iou = inter_meter.sum / (union_meter.sum + 1e-10)
-    miou = iou[[1, 2, 3]].mean() * 100
+    iou = inter_meter.sum / (union_meter.sum + 1e-10) * 100
+    miou = iou[[1, 2, 3]].mean()
     writer.add_scalar('label_eval/IoU', miou, 0)
+    writer.add_scalar('label_eval/plant', iou[1], 0)
+    writer.add_scalar('label_eval/artificial_object', iou[2], 0)
+    writer.add_scalar('label_eval/ground', iou[3], 0)
 
     writer.close()
 
