@@ -371,9 +371,9 @@ def main(args):
             from utilities.train_eval_seg import train_seg as train
             from utilities.train_eval_seg import val_seg as val
 
-        miou_train, train_loss = train(
+        iou_train, train_loss = train(
             model, train_loader, optimizer, criterion, seg_classes, epoch, device=device, use_depth=args.use_depth, add_criterion=nid_loss)
-        miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device, use_depth=args.use_depth, add_criterion=nid_loss)
+        iou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device, use_depth=args.use_depth, add_criterion=nid_loss)
 
         batch_train = iter(train_loader).next()
         batch = iter(val_loader).next()
@@ -426,6 +426,7 @@ def main(args):
 #            writer.add_image('Segmentation/results/val', image_grid, epoch)
 
         # remember best miou and save checkpoint
+        miou_val = iou_val[[1, 2, 3]].mean()
         is_best = miou_val > best_miou
         best_miou = max(miou_val, best_miou)
 
@@ -442,8 +443,11 @@ def main(args):
         writer.add_scalar('Segmentation/LR/seg', round(lr_seg, 6), epoch)
         writer.add_scalar('Segmentation/Loss/train', train_loss, epoch)
         writer.add_scalar('Segmentation/Loss/val', val_loss, epoch)
-        writer.add_scalar('Segmentation/mIOU/train', miou_train, epoch)
+        writer.add_scalar('Segmentation/mIOU/train', iou_train[[1,2,3]].mean(), epoch)
         writer.add_scalar('Segmentation/mIOU/val', miou_val, epoch)
+        writer.add_scalar('Segmentation/plant_IOU/val', iou_val[1], epoch)
+        writer.add_scalar('Segmentation/ao_IOU/val', iou_val[2], epoch)
+        writer.add_scalar('Segmentation/ground_IOU/val', iou_val[3], epoch)
         writer.add_scalar('Segmentation/Complexity/Flops', best_miou, math.ceil(flops))
         writer.add_scalar('Segmentation/Complexity/Params', best_miou, math.ceil(num_params))
 
