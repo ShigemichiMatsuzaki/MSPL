@@ -47,17 +47,9 @@ def load_weights(model, weights):
     model.load_state_dict(model_dict)
 
 def get_output(model, image, model_name='espdnetue', device='cuda'):
-
-#    ## upsampling layer
-#    if version.parse(torch.__version__) >= version.parse('0.4.0'):
-#        interp = nn.Upsample(size=test_image_size, mode='bilinear', align_corners=True)
-#    else:
-#        interp = nn.Upsample(size=test_image_size, mode='bilinear')
-
     model.to(device)
     kld_layer = PixelwiseKLD()
     softmax2d = nn.Softmax2d()
-    # if args.model == 'ENet':
     '''
     Get outputs from the input images
     '''
@@ -75,7 +67,6 @@ def get_output(model, image, model_name='espdnetue', device='cuda'):
 
     output2 = pred + 0.5 * pred_aux
 
-#    output = softmax2d(interp(output2)).cpu().data[0].numpy()
     output = softmax2d(output2).cpu().data[0].numpy()
 
     kld = kld_layer(pred, pred_aux).cpu().data[0].numpy()
@@ -84,6 +75,7 @@ def get_output(model, image, model_name='espdnetue', device='cuda'):
 
 def merge_outputs(amax_outputs, seg_classes, thresh=None):
     # If not specified, the label with votes more than half of the number of the outputs is selected
+    # We've found that 'all' policy provides the best accuracy
     num_data = amax_outputs.shape[0]
     if thresh is None or thresh == 'half':
         thresh = num_data // 2 + 1
@@ -94,12 +86,6 @@ def merge_outputs(amax_outputs, seg_classes, thresh=None):
     else:
         thresh = num_data // 2 + 1
     
-    # Convert the tuple of ndarrays to an ndarray
-    # If there is only one data, explicitly reshape the array
-#    amax_outputs = np.array(amax_outputs)
-#    if len(amax_outputs.shape) == 2:
-#        amax_outputs = amax_outputs.reshape(1, amax_outputs.shape[0], amax_outputs.shape[1])
-
     counts_lst = []
     for class_id in range(seg_classes):
         # Count the number of data with class 'class_id' on each pixel
@@ -180,15 +166,11 @@ def main(args):
             for m, os_data in zip(os_model_list, os_data_name_list):
                 # Output: Numpy, KLD: Numpy
                 output, _ = get_output(m, inputs) 
-#                output2, _ = get_output(model2, image)
 
                 output = output.transpose(1,2,0)
-#                output2 = output2.transpose(1,2,0)
                 amax_output = np.asarray(np.argmax(output, axis=2), dtype=np.uint8)
-#                amax_output2 = np.asarray(np.argmax(output2, axis=2), dtype=np.uint8)
 
                 # save visualized seg maps & predication prob map
-#                if args.outsource1 == 'camvid':
                 if os_data == 'camvid':
                     amax_output = id_camvid_to_greenhouse[amax_output]
                 elif os_data == 'cityscapes':
@@ -196,16 +178,12 @@ def main(args):
                 elif os_data == 'forest':
                     amax_output = id_forest_to_greenhouse[amax_output]
 
-#                if args.outsource2 == 'camvid':
-#                    amax_output2 = id_camvid_to_greenhouse[amax_output2]
-#                else:
-#                    amax_output2 = id_cityscapes_to_greenhouse[amax_output2]
                 output_list.append(amax_output)
 
-#            amax_output, kld = merge_outputs(amax_output1, amax_output2, kld1, kld2)
             amax_output = merge_outputs(np.array(output_list), 
                 seg_classes=5, thresh='all')
             
+            # Output the generated label images
             if args.output_image:
                 for path_name in name:
 #                    path_name = name[0]
@@ -218,7 +196,6 @@ def main(args):
                         amax_output_img_color = colorize_mask(output_i, color_palette)
                         amax_output_img_color.save('%s/%s_color_%s.png' % (args.savedir, image_name, name_i))
 
-#            outputs_argmax = torch.from_numpy(outputs_argmax)
             outputs_argmax = torch.from_numpy(amax_output)
             
             inter, union = miou_class.get_iou(outputs_argmax, target)
@@ -226,20 +203,6 @@ def main(args):
             union_meter.update(union)
 
             # measure elapsed time
-            #batch_time.update(time.time() - end)
-            #end = time.time()
-
-
-#            in_training_visualization_img(
-#                model, 
-#                images=batch[0].to(device=device),
-#                labels=target,
-#                predictions=outputs_argmax,
-#                class_encoding=color_encoding_greenhouse,
-#                writer=writer,
-#                data='label_eval',
-#                device=device)
-
             print("Batch {}/{} finished".format(i+1, len(val_loader)))
     
     iou = inter_meter.sum / (union_meter.sum + 1e-10) * 100
@@ -262,44 +225,16 @@ if __name__ == "__main__":
         segmentation_datasets
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--resume', type=str, default=None, help='path to checkpoint to resume from')
     parser.add_argument('--workers', type=int, default=4, help='number of data loading workers')
-    parser.add_argument('--ignore-idx', type=int, default=255, help='Index or label to be ignored during training')
-
-    # model details
-    parser.add_argument('--freeze-bn', action='store_true', default=False, help='Freeze BN params or not')
-
     # dataset and result directories
     parser.add_argument('--dataset', type=str, default='pascal', choices=segmentation_datasets, help='Datasets')
     parser.add_argument('--data-path', type=str, default='', help='dataset path')
-    parser.add_argument('--coco-path', type=str, default='', help='MS COCO dataset path')
     parser.add_argument('--savedir', type=str, default='./results_segmentation', help='Location to save the results')
-    ## only for cityscapes
-    parser.add_argument('--coarse', action='store_true', default=False, help='Want to use coarse annotations or not')
-
-    # scheduler details
-    parser.add_argument('--scheduler', default='hybrid', choices=segmentation_schedulers,
-                        help='Learning rate scheduler (fixed, clr, poly)')
-    parser.add_argument('--epochs', type=int, default=100, help='num of training epochs')
-    parser.add_argument('--step-size', default=51, type=int, help='steps at which lr should be decreased')
-    parser.add_argument('--lr', default=9e-3, type=float, help='initial learning rate')
-    parser.add_argument('--lr-mult', default=10.0, type=float, help='initial learning rate')
-    parser.add_argument('--lr-decay', default=0.5, type=float, help='factor by which lr should be decreased')
-    parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
-    parser.add_argument('--weight-decay', default=4e-5, type=float, help='weight decay (default: 4e-5)')
-    # for Polynomial LR
-    parser.add_argument('--power', default=0.9, type=float, help='power factor for Polynomial LR')
-
-    # for hybrid LR
-    parser.add_argument('--clr-max', default=61, type=int, help='Max number of epochs for cylic LR before '
-                                                                'changing last cycle to linear')
-    parser.add_argument('--cycle-len', default=5, type=int, help='Duration of cycle')
 
     # input details
     parser.add_argument('--batch-size', type=int, default=40, help='list of batch sizes')
     parser.add_argument('--crop-size', type=int, nargs='+', default=[480, 256],
                         help='list of image crop sizes, with each item storing the crop size (should be a tuple).')
-    parser.add_argument('--loss-type', default='ce', choices=segmentation_loss_fns, help='Loss function (ce or miou)')
 
     # model related params
     parser.add_argument('--s', type=float, default=2.0, help='Factor by which channels will be scaled')
@@ -319,7 +254,6 @@ if __name__ == "__main__":
     parser.add_argument('--use-aux', default=False, type=bool, help='Use auxiliary loss')
     parser.add_argument('--normalize', default=False, type=bool, help='Use auxiliary loss')
     parser.add_argument('--output-image', default=False, type=bool, help='Save images instead of writing in tensorboard log')
-#    parser.add_argument('--suffix', default='', type=str, help='Suffix of the save directory')
     parser.add_argument("--outsource1", type=str, default=None, dest='outsource1',
                         help="A dataset name that is used as a external dataset to provide initial pseudo-labels")
     parser.add_argument("--os-model1", type=str, default="espdnet", dest='os_model1',
@@ -346,8 +280,6 @@ if __name__ == "__main__":
     random.seed(1882)
     torch.manual_seed(1882)
 
-
-
     if not args.finetune:
         from model.weight_locations.classification import model_weight_map
 
@@ -358,8 +290,6 @@ if __name__ == "__main__":
         elif args.model == 'deeplabv3':
             args.weights  = ''
 
-    #        if args.use_depth:
-    #            args.weights
         else:
             weight_file_key = '{}_{}'.format(args.model, args.s)
             assert weight_file_key in model_weight_map.keys(), '{} does not exist'.format(weight_file_key)
@@ -372,13 +302,11 @@ if __name__ == "__main__":
     assert args.data_path != '', 'Dataset path is an empty string. Please check.'
 
     args.crop_size = tuple(args.crop_size)
-    #timestr = time.strftime("%Y%m%d-%H%M%S")
     now = datetime.datetime.now()
-    now += datetime.timedelta(hours=9)
+    now += datetime.timedelta(hours=9) # JST = UTC + 9
     timestr = now.strftime("%Y%m%d-%H%M%S")
 
     args.savedir = '{}/{}_{}_{}'.format(
         args.savedir, args.model, args.dataset, timestr)
 
     main(args)
-
