@@ -303,7 +303,7 @@ class ESPDNetwithUncertaintyEstimation(nn.Module):
 
 def espdnetue_seg2(args, load_entire_weights=False, fix_pyr_plane_proj=False):
     classes = args.classes
-    scale=args.s
+#    scale=args.s
     weights = args.weights
     print(weights)
     #depth_weights = 'results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200401-114045/espnetv2_2.0_480_checkpoint.pth.tar'

@@ -269,6 +269,102 @@ class GreenhouseRGBDSegmentation(data.Dataset):
         else:
             return rgb_img, label_img, filename, self.reg_weight
 
+class GreenhouseRGBDSegmentationTrav(data.Dataset):
+
+    def __init__(self, list_name, size=(480, 256), use_depth=True, normalize=True):
+        self.use_depth = use_depth
+        self.normalize = normalize
+
+        data_file = list_name
+
+        self.images = []
+        self.masks = []
+        self.depths = []
+        with open(data_file, 'r') as lines:
+            for line in lines:
+                line_split = line.split(',')
+#                rgb_img_loc = root + os.sep + line_split[0].rstrip()
+                rgb_img_loc = line_split[0].rstrip()
+#                rgb_img_loc = root + os.sep + line_split[1].rstrip()
+                label_img_loc = line_split[1].rstrip()
+#                print(rgb_img_loc)
+#                print(label_img_loc)
+                if not os.path.isfile(rgb_img_loc):
+                    print("Not found : " + rgb_img_loc)
+                assert os.path.isfile(rgb_img_loc)
+
+                if not os.path.isfile(label_img_loc):
+                    print("Not found : " + label_img_loc)
+                assert os.path.isfile(label_img_loc)
+                if self.use_depth:
+                    depth_img_loc = line_split[2].rstrip()
+                    if not os.path.isfile(depth_img_loc):
+                        print("Not found : " + depth_img_loc)
+                    assert os.path.isfile(depth_img_loc)
+
+                self.images.append(rgb_img_loc)
+                self.masks.append(label_img_loc)
+                if self.use_depth:
+                    self.depths.append(depth_img_loc)
+
+        if isinstance(size, tuple):
+            self.size = size
+        else:
+            self.size = (size, size)
+
+        self.train_transforms, self.val_transforms = self.transforms()
+
+    def transforms(self):
+        train_transforms = Compose(
+            [
+                Resize(size=self.size),
+                Normalize() if self.normalize else Tensorize()
+            ]
+        )
+        val_transforms = Compose(
+            [
+                Resize(size=self.size),
+                Normalize() if self.normalize else Tensorize()
+            ]
+        )
+        return train_transforms, val_transforms
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, index):
+        rgb_img = Image.open(self.images[index]).convert('RGB')
+        label_img = Image.open(self.masks[index]).convert('L')
+        '''
+        Open a depth image using OpenCV instead of PIL to deal with int16 format of the image
+        '''
+        if self.use_depth:
+            cv_depth = cv2.imread(self.depths[index], cv2.IMREAD_GRAYSCALE)
+            # cv_depth = cv2.medianBlur(cv_depth, 7)
+            #cv_depth = np.where(cv_depth < 10, cv_depth, 10) * (255 // 10)
+            cv_depth.astype(np.uint8)
+            #print(cv_depth)
+            #print(np.histogram(cv_depth, bins=10))
+            depth_img = Image.fromarray(cv_depth)
+#            print(np.asarray(rgb_img))
+
+        label_np = np.array(label_img, np.uint8)
+        label_np[label_np==255] = 1
+        label_img = Image.fromarray(label_np)
+
+        if self.use_depth:
+            rgb_img, label_img, depth_img = self.train_transforms(rgb_img, label_img, depth_img)
+        else:
+            rgb_img, label_img = self.train_transforms(rgb_img, label_img)
+
+        # Get a file name
+        filename = self.images[index]#.rsplit('/', 1)[1]
+
+        if self.use_depth:
+            return rgb_img, label_img, depth_img, filename
+        else:
+            return rgb_img, label_img, filename
+
 class GreenhouseDepth(data.Dataset):
 
     def __init__(self, root, list_name, train=True, scale=(0.5, 2.0), size=(480, 256), use_filter=True):

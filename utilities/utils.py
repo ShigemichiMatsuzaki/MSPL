@@ -122,7 +122,7 @@ def in_training_visualization_img(model, images, depths=None, labels=None, predi
     ])
 
     # Do transformation of label tensor and prediction tensor
-    color_train       = batch_transform(labels.data.cpu(), label_to_rgb)
+    color_train       = batch_transform(labels.data.cpu(), label_to_rgb) if labels is not None else None
     color_predictions = batch_transform(predictions.data.cpu(), label_to_rgb)
 
     write_summary_batch(images.data.cpu(), color_train, color_predictions, writer, epoch, data)
@@ -172,7 +172,8 @@ def batch_transform(batch, transform):
 def write_summary_batch(images, train_labels, pred_labels, writer, epoch, data):
     # Make a grid with the images and labels and convert it to numpy
     images = torchvision.utils.make_grid(images).numpy()
-    train_labels = torchvision.utils.make_grid(train_labels).numpy()
+    if train_labels is not None:
+        train_labels = torchvision.utils.make_grid(train_labels).numpy()
     pred_labels = torchvision.utils.make_grid(pred_labels).numpy()
 
 #    images = np.transpose(images, (1, 2, 0))
@@ -180,7 +181,8 @@ def write_summary_batch(images, train_labels, pred_labels, writer, epoch, data):
 #    pred_labels = np.transpose(pred_labels, (1, 2, 0))
 
     writer.add_image(data + '/images', images, epoch)
-    writer.add_image(data + '/train_labels', train_labels, epoch)
+    if train_labels is not None:
+        writer.add_image(data + '/train_labels', train_labels, epoch)
     writer.add_image(data + '/pred_labels', pred_labels, epoch)
 
 class LongTensorToRGBPIL(object):

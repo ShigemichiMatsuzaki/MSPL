@@ -144,10 +144,10 @@ class SoftArgMax(nn.Module):
         return self.soft_arg_max(x)
 
 class UncertaintyWeightedSegmentationLoss(nn.Module):
-    def __init__(self, num_classes, class_weights=None, ignore_idx=None):
+    def __init__(self, num_classes, class_weights=None, ignore_idx=None, device='cuda'):
         super(UncertaintyWeightedSegmentationLoss, self).__init__()
         self.num_classes = num_classes
-        self.class_weights = class_weights if class_weights is not None else torch.ones(self.num_classes)
+        self.class_weights = class_weights if class_weights is not None else torch.ones(self.num_classes).to(device)
         self.ignore_idx = ignore_idx
         if self.ignore_idx is not None:
             self.class_weights[self.ignore_idx] = 0.0
@@ -167,7 +167,7 @@ class UncertaintyWeightedSegmentationLoss(nn.Module):
         # Gather log probabilities with respect to target
         logp = logp.gather(1, target.view(batch_size, 1, H, W))
 
-        # Multiply with we-ights
+        # Multiply with weights
         logp = logp * torch.exp(-u_weight.reshape(batch_size, 1, H, W))
 
         # Rescale so that loss is in approx. same interval
