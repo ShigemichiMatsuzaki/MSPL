@@ -200,12 +200,14 @@ def main():
         num_workers=0, pin_memory=args.pin_memory)
 
     # Loss
-    if args.use_uncertainty:
-        criterion = UncertaintyWeightedSegmentationLoss(args.classes)
-    else:
-        criterion = SegmentationLoss(n_classes=args.classes, device=device)
+    class_weights = torch.tensor([1.0, 0.2, 1.0, 1.0, 0.0]).to(device)
 
-    criterion_test = SegmentationLoss(n_classes=args.classes, device=device)
+    if args.use_uncertainty:
+        criterion = UncertaintyWeightedSegmentationLoss(args.classes, class_weights=class_weights)
+    else:
+        criterion = SegmentationLoss(n_classes=args.classes, device=device, class_weights=class_weights)
+
+    criterion_test = SegmentationLoss(n_classes=args.classes, device=device, class_weights=class_weights)
 
     # Optimizer
     if args.use_depth:

@@ -9,14 +9,14 @@ import math
 
 
 class SegmentationLoss(nn.Module):
-    def __init__(self, n_classes=21, loss_type='ce', device='cuda', ignore_idx=255, class_wts=None):
+    def __init__(self, n_classes=21, loss_type='ce', device='cuda', ignore_idx=255, class_weights=None):
         super(SegmentationLoss, self).__init__()
         self.loss_type = loss_type
         self.n_classes = n_classes
         self.device = device
         self.ignore_idx = ignore_idx
         self.smooth = 1e-6
-        self.class_wts = class_wts
+        self.class_wts = class_weights
 
         if self.loss_type == 'bce':
             self.loss_fn = nn.BCEWithLogitsLoss(weight=self.class_wts)
