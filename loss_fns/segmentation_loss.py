@@ -187,3 +187,28 @@ class PixelwiseKLD(nn.Module):
         kld_i = p1 * logp1 - p1 * logp2
 
         return torch.sum(kld_i, dim=1)
+
+class SelectiveBCE(nn.Module):
+    def __init__(self, with_logits=True, device='cuda'):
+        super(SelectiveBCE, self).__init__()
+        if with_logits:
+            self.loss_func = nn.BCEWithLogitsLoss(reduction='none').to(device)
+        else:
+            self.loss_func = nn.BCELoss(reduction='none').to(device)
+
+    def forward(self, input, target, bool_index_mask=None):
+        '''
+        :param input: Input (Tensor of size (B, 1, H, W))
+        :param target: Target label (Tensor)
+        :param mask: Mask indicating pixels to be used in loss calculation (Tensor)
+        :return: loss value
+        '''
+
+        # Get non-reduced loss values
+        loss = self.loss_func(input, torch.reshape(target, input.size()).float())
+
+        if bool_index_mask is not None:
+            # Extract the values of pixels whose mask is 1
+            loss = loss[bool_index_mask]
+
+        return loss.mean()

@@ -270,7 +270,9 @@ class GreenhouseRGBDSegmentation(data.Dataset):
             return rgb_img, label_img, filename, self.reg_weight
 
 class GreenhouseRGBDSegmentationTrav(data.Dataset):
-
+    '''
+        Pairs of RGB image and its traversability mask
+    '''
     def __init__(self, list_name, size=(480, 256), use_depth=True, normalize=True):
         self.use_depth = use_depth
         self.normalize = normalize

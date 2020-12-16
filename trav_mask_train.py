@@ -1,14 +1,11 @@
 import argparse
-import sys
 from packaging import version
 import time
 import datetime
 # import util
 import os
 import os.path as osp
-import timeit
 from collections import OrderedDict
-import scipy.io
 
 import torch
 import torchvision.models as models
