@@ -124,6 +124,8 @@ def get_arguments():
     parser.add_argument('--use-uncertainty', default=False, type=bool, help='Use uncertainty weighting')
     parser.add_argument("--tidyup", type=bool, default=True,
                         help="Whether to remove label images etc. after the training")
+    parser.add_argument('--spatial', default=False, type=bool, help='Use 3x3 kernel or 1x1 kernel in probability estimation')
+    parser.add_argument('--feature-construction', default='concat', type=str, help='Use 3x3 kernel or 1x1 kernel in probability estimation')
 
     return parser.parse_args()
 
@@ -164,7 +166,8 @@ def main():
 
     # Models
     from model.classification.label_prob_estimator import LabelProbEstimator
-    prob_model = LabelProbEstimator()
+    in_channels = 32 if args.feature_construction == 'concat' else 16
+    prob_model = LabelProbEstimator(in_channels=in_channels, spatial=args.spatial)
     prob_model.to(device)
 
     from model.segmentation.espdnet_ue import espdnetue_seg2
@@ -253,7 +256,8 @@ def train(trainloader, prob_model, seg_model, criterion, device, optimizer, writ
             prob_output = prob_model(feature)
 
             # Loss calculation
-            loss = criterion(prob_output, labels, seg_output_amax==PLANT)
+#            loss = criterion(prob_output, labels, seg_output_amax==PLANT)
+            loss = criterion(prob_output, labels)
 
             # Model regularizer
             losses.update(loss.item(), feature.size(0))
@@ -273,14 +277,29 @@ def test(testloader, prob_model, seg_model, device, writer_idx, writer):
     ds = GreenhouseRGBDSegmentation(
         list_name=args.data_test_list, train=False, use_traversable=True, use_depth=args.use_depth)
 
-    testloader = data.DataLoader(ds, batch_size=12, shuffle=False, pin_memory=args.pin_memory)
+    testloader = data.DataLoader(ds, batch_size=16, shuffle=False, pin_memory=args.pin_memory)
     sigmoid = nn.Sigmoid()
+    prob_sum_meter = AverageMeter()
 
     ## model for evaluation
     prob_model.eval()
 
     # TODO: Change this (implement the same function in 'utility/utils.py', or uncomment the code below with slight modification)
     with torch.no_grad():
+        # Calculate a constant c
+
+        for i_iter, batch in enumerate(tqdm(testloader)):
+            images = batch[0].to(device)
+            masks = batch[1].to(device)
+            if args.use_depth:
+                depths = batch[2].to(device)
+
+            output_dict = get_output(seg_model, images)
+            feature = output_dict['feature']
+            masks = torch.reshape(masks, (masks.size(0), -1, masks.size(1), masks.size(2)))
+            prob_sum_meter.update(sigmoid(prob_model(feature))[masks==1].mean().item(), images.size(0))
+        
+        # Visualize
         batch = iter(testloader).next()
 
         images = batch[0].to(device)
@@ -291,7 +310,9 @@ def test(testloader, prob_model, seg_model, device, writer_idx, writer):
 
         feature = output_dict['feature']
 
-        prob = sigmoid(prob_model(feature))
+        c = prob_sum_meter.avg
+        prob = sigmoid(prob_model(feature)) / c
+        prob /= prob.max()
 
         image_grid = torchvision.utils.make_grid(images.data.cpu()).numpy()
         prob_grid = torchvision.utils.make_grid(prob.data.cpu()).numpy()
@@ -333,7 +354,10 @@ def get_output(model, image, model_name='espdnetue', device='cuda'):
     # Calculate feature from the intermediate layers
     main_feature = F.interpolate(activation['output_main'], size=(image.size(2), image.size(3)), mode='bilinear')
     aux_feature = F.interpolate(activation['output_aux'], size=(image.size(2), image.size(3)), mode='bilinear')
-    feature = main_feature + 0.5 * aux_feature
+    if args.feature_construction == 'concat':
+        feature = torch.cat((main_feature, aux_feature), dim=1)
+    else:
+        feature = main_feature + 0.5 * aux_feature
 
     return {'output': output, 'feature': feature}
 

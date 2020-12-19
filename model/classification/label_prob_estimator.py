@@ -10,13 +10,17 @@ class LabelProbEstimator(nn.Module):
     This class defines a simple architecture for estimating binary label probability of 1-d features
     '''
 
-    def __init__(self, in_channels=16, use_sigmoid=False):
+    def __init__(self, in_channels=16, use_sigmoid=False, spatial=True):
         '''
             Constructor
         '''
         super().__init__()
 
-        self.conv1x1 = nn.Conv2d(in_channels=in_channels, out_channels=1, kernel_size=1)
+        if spatial:
+            self.conv1x1 = nn.Conv2d(in_channels=in_channels, out_channels=1, kernel_size=3, padding=1)
+        else:
+            self.conv1x1 = nn.Conv2d(in_channels=in_channels, out_channels=1, kernel_size=1)
+
         self.relu = nn.ReLU()
 
         self.use_sigmoid = use_sigmoid
