@@ -2,7 +2,8 @@ CUDA_VISIBLE_DEVICES=0 python trav_mask_pu_train.py \
     --num-classes 5 \
     --learning-rate 0.0005 \
     --save /tmp/runs/uest/trav \
-    --data-trav-list ./vision_datasets/traversability_mask/greenhouse_b_train.lst \
+    --data-train-list ./vision_datasets/traversability_mask/greenhouse_b_train.lst \
+    --data-test-list ./vision_datasets/traversability_mask/greenhouse_a_test.lst \
     --optimizer SGD \
     --batch-size 64 \
     --gpu 0 \

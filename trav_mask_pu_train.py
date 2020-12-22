@@ -63,9 +63,9 @@ def get_arguments():
     ### shared by train & val
     # data
     parser.add_argument('--savedir', type=str, default='./results_segmentation', help='Location to save the results')
-    parser.add_argument('--data-trav-list', type=str, default='./vision_datasets/traversability_mask/greenhouse_b_train.lst',
+    parser.add_argument('--data-train-list', type=str, default='./vision_datasets/traversability_mask/greenhouse_b_train.lst',
                         help='Location to save the results')
-    parser.add_argument('--data-test-list', type=str, default='./vision_datasets/greenhouse/val_greenhouse2.lst',
+    parser.add_argument('--data-test-list', type=str, default='./vision_datasets/traversability_mask/greenhouse_a_test.lst',
                         help='Location to save the results')
     # model
     parser.add_argument("--restore-from", type=str, default=RESTORE_FROM,
@@ -154,22 +154,34 @@ def main():
         os.makedirs(save_pred_path)
     writer = SummaryWriter(save_path)
 
+    #
     # Dataset
+    #
     from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentationTrav, GREENHOUSE_CLASS_LIST
     args.classes = len(GREENHOUSE_CLASS_LIST)
-    travset = GreenhouseRGBDSegmentationTrav(list_name=args.data_trav_list, use_depth=args.use_depth)
+    trav_train_set = GreenhouseRGBDSegmentationTrav(list_name=args.data_train_list, use_depth=args.use_depth)
+    trav_test_set = GreenhouseRGBDSegmentationTrav(list_name=args.data_test_list, use_depth=args.use_depth)
 
+    #
     # Dataloader for generating the pseudo-labels
-    travloader = torch.utils.data.DataLoader(
-        travset, batch_size=args.batch_size, shuffle=True,
+    #
+    trav_train_loader = torch.utils.data.DataLoader(
+        trav_train_set, batch_size=args.batch_size, shuffle=True,
+        num_workers=0, pin_memory=args.pin_memory)
+    trav_test_loader = torch.utils.data.DataLoader(
+        trav_test_set, batch_size=len(trav_test_set), shuffle=True,
         num_workers=0, pin_memory=args.pin_memory)
 
+    #
     # Models
+    #
+    # Label Probability
     from model.classification.label_prob_estimator import LabelProbEstimator
     in_channels = 32 if args.feature_construction == 'concat' else 16
     prob_model = LabelProbEstimator(in_channels=in_channels, spatial=args.spatial)
     prob_model.to(device)
 
+    # Segmentation
     from model.segmentation.espdnet_ue import espdnetue_seg2
     args.weights = args.restore_from
     seg_model = espdnetue_seg2(args, load_entire_weights=True, fix_pyr_plane_proj=True)
@@ -177,16 +189,16 @@ def main():
 
     criterion = SelectiveBCE()
 #    # Datset for training
-    from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation
+#    from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation
 #    trainset = GreenhouseRGBDSegmentation(list_name=tgt_train_lst, use_depth=args.use_depth, use_traversable=True)
-    testset  = GreenhouseRGBDSegmentation(list_name=args.data_test_list, use_depth=args.use_depth, use_traversable=True)
+#    testset  = GreenhouseRGBDSegmentation(list_name=args.data_test_list, use_depth=args.use_depth, use_traversable=True)
 #
 #    trainloader = torch.utils.data.DataLoader(
 #        trainset, batch_size=args.batch_size, shuffle=True,
 #        num_workers=0, pin_memory=args.pin_memory)
-    testloader = torch.utils.data.DataLoader(
-        testset, batch_size=args.batch_size, shuffle=True,
-        num_workers=0, pin_memory=args.pin_memory)
+#    testloader = torch.utils.data.DataLoader(
+#        testset, batch_size=args.batch_size, shuffle=True,
+#        num_workers=0, pin_memory=args.pin_memory)
 #
 #    # Loss
 #    class_weights = torch.tensor([1.0, 0.2, 1.0, 1.0, 0.0]).to(device)
@@ -219,12 +231,16 @@ def main():
 ##    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50, 100], gamma=0.5)
 #
 #    best_miou = 0.0
+    calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, 1.0, writer, device=device)
+    c = 1.0
     for epoch in range(0, args.epoch):
         # Run a training epoch
-        train(travloader, prob_model, seg_model, criterion, device, optimizer, epoch, writer)
+        train(trav_train_loader, prob_model, seg_model, criterion, device, optimizer, epoch, writer)
         scheduler.step()
 
-        test(testloader, prob_model, seg_model, device, epoch, writer)
+        c = test(trav_test_loader, prob_model, seg_model, criterion, device, epoch, writer)
+    
+    calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, c, writer, device=device)
 
 def train(trainloader, prob_model, seg_model, criterion, device, optimizer, writer_idx, writer=None):
     """Create the model and start the training."""
@@ -238,8 +254,8 @@ def train(trainloader, prob_model, seg_model, criterion, device, optimizer, writ
         for i_iter, batch in enumerate(tqdm(trainloader)):
 #            feature = batch['feature'].to(device)
 #            label = batch['label'].to(device)
-            images = batch[0].to(device)
-            labels = batch[1].to(device)
+            images = batch["rgb"].to(device)
+            masks = batch["mask"].to(device)
 
             optimizer.zero_grad()
 
@@ -257,7 +273,7 @@ def train(trainloader, prob_model, seg_model, criterion, device, optimizer, writ
 
             # Loss calculation
 #            loss = criterion(prob_output, labels, seg_output_amax==PLANT)
-            loss = criterion(prob_output, labels)
+            loss = criterion(prob_output, masks)
 
             # Model regularizer
             losses.update(loss.item(), feature.size(0))
@@ -267,19 +283,16 @@ def train(trainloader, prob_model, seg_model, criterion, device, optimizer, writ
             optimizer.step()
 
     # Write summary
+    write_image_to_writer(trainloader, seg_model, prob_model, 1.0, writer, writer_idx, mode='train', device=device)
     writer.add_scalar('traversability_mask/train/loss', losses.avg, writer_idx)
     writer.add_scalar('traversability_mask/train/learning_rate', optimizer.param_groups[0]['lr'], writer_idx)
 
-def test(testloader, prob_model, seg_model, device, writer_idx, writer):
+def test(testloader, prob_model, seg_model, criterion, device, writer_idx, writer):
     """Create the model and start the evaluation process."""
     # For logging the training status
-    from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation
-    ds = GreenhouseRGBDSegmentation(
-        list_name=args.data_test_list, train=False, use_traversable=True, use_depth=args.use_depth)
-
-    testloader = data.DataLoader(ds, batch_size=16, shuffle=False, pin_memory=args.pin_memory)
     sigmoid = nn.Sigmoid()
     prob_sum_meter = AverageMeter()
+    losses = AverageMeter()
 
     ## model for evaluation
     prob_model.eval()
@@ -289,36 +302,62 @@ def test(testloader, prob_model, seg_model, device, writer_idx, writer):
         # Calculate a constant c
 
         for i_iter, batch in enumerate(tqdm(testloader)):
-            images = batch[0].to(device)
-            masks = batch[1].to(device)
+            images = batch["rgb"].to(device)
+            masks = batch["mask"].to(device)
             if args.use_depth:
-                depths = batch[2].to(device)
+                depths = batch["depth"].to(device)
 
             output_dict = get_output(seg_model, images)
             feature = output_dict['feature']
             masks = torch.reshape(masks, (masks.size(0), -1, masks.size(1), masks.size(2)))
-            prob_sum_meter.update(sigmoid(prob_model(feature))[masks==1].mean().item(), images.size(0))
-        
-        # Visualize
-        batch = iter(testloader).next()
+            prob_output = prob_model(feature)
+            prob_sum_meter.update(sigmoid(prob_output)[masks==1].mean().item(), images.size(0))
 
-        images = batch[0].to(device)
+            # Loss calculation
+#            loss = criterion(prob_output, labels, seg_output_amax==PLANT)
+            loss = criterion(prob_output, masks)
+
+            # Model regularizer
+            losses.update(loss.item(), feature.size(0))
+    
+    c = prob_sum_meter.avg
+        
+    # Write summary
+    writer.add_scalar('traversability_mask/test/loss', losses.avg, writer_idx)
+    write_image_to_writer(testloader, seg_model, prob_model, c, writer, writer_idx, mode='test', device=device)
+
+    return c
+
+def write_image_to_writer(dataloader, seg_model, prob_model, c, writer, writer_idx, mode='test', device='cuda'):
+    # Visualize
+    sigmoid = nn.Sigmoid()
+#    prob_sum_meter = AverageMeter()
+
+    batch = iter(dataloader).next()
+
+    with torch.no_grad():
+#        images = batch["rgb"].to(device)
+        images = batch["rgb_orig"].to(device)
+        masks = batch["mask"].to(device)
         if args.use_depth:
-            depths = batch[2].to(device)
+            depths = batch["depth"].to(device)
 
         output_dict = get_output(seg_model, images)
 
         feature = output_dict['feature']
 
-        c = prob_sum_meter.avg
+#        c = prob_sum_meter.avg
         prob = sigmoid(prob_model(feature)) / c
         prob /= prob.max()
 
+        masks = torch.reshape(masks, (masks.size(0), -1, masks.size(1), masks.size(2)))
         image_grid = torchvision.utils.make_grid(images.data.cpu()).numpy()
+        mask_grid = torchvision.utils.make_grid(masks.data.cpu()).numpy()
         prob_grid = torchvision.utils.make_grid(prob.data.cpu()).numpy()
 
-        writer.add_image('traversability_mask/train/image', image_grid, writer_idx)
-        writer.add_image('traversability_mask/train/prob', prob_grid, writer_idx)
+        writer.add_image('traversability_mask/{}/image'.format(mode), image_grid, writer_idx)
+        writer.add_image('traversability_mask/{}/mask'.format(mode), mask_grid, writer_idx)
+        writer.add_image('traversability_mask/{}/prob'.format(mode), prob_grid, writer_idx)
 
 def get_output(model, image, model_name='espdnetue', device='cuda'):
     softmax2d = nn.Softmax2d()
@@ -370,6 +409,50 @@ def update_image_list(tgt_train_lst, image_path_list, label_path_list, depth_pat
                 f.write("%s,%s\n" % (image_path_list[idx], label_path_list[idx]))
 
     return
+
+def calculate_iou_with_different_threshold(dataloader, seg_model, prob_model, c, writer, device='cuda', min_thresh=0.0, max_thresh=1.0, step=0.1):
+    # For logging the training status
+    sigmoid = nn.Sigmoid()
+    num = round((max_thresh-min_thresh)/step)
+    iou_sum_meter_list = []
+    for i in range(num):
+        iou_sum_meter = AverageMeter()
+        iou_sum_meter_list.append(iou_sum_meter)
+
+    ## model for evaluation
+    prob_model.eval()
+
+    with torch.no_grad():
+        # Calculate a constant c
+
+        # For each data batch
+        for i_iter, batch in enumerate(tqdm(dataloader)):
+            images = batch["rgb"].to(device)
+            masks = batch["mask"].to(device)
+            masks = torch.reshape(masks, (masks.size(0), -1, masks.size(1), masks.size(2)))
+            if args.use_depth:
+                depths = batch["depth"].to(device)
+
+            output_dict = get_output(seg_model, images)
+            feature = output_dict['feature']
+            prob_output = prob_model(feature)
+            prob_output = sigmoid(prob_output) / c
+            prob_output /= prob_output.max()
+
+            # Calculate IoUs with different thresholds
+            for i, thresh in enumerate(np.arange(min_thresh, max_thresh, step)):
+                pred_mask = prob_output > thresh
+                union = pred_mask | (masks == 1)
+                int   = pred_mask & (masks == 1)
+
+                iou = torch.div(int.sum().float(), union.sum().float())
+
+                print(union.sum().item(), int.sum().item(), iou.item())
+
+                iou_sum_meter_list[i].update(iou.item(), feature.size(0))
+        
+        for i, thresh in enumerate(np.arange(min_thresh, max_thresh, step)):
+            writer.add_scalar('traversability_mask/test/iou_per_thresh', iou_sum_meter_list[i].avg, i)
 
 if __name__=='__main__':
     main()
