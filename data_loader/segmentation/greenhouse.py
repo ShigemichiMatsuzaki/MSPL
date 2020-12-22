@@ -329,6 +329,7 @@ class GreenhouseRGBDSegmentationTrav(data.Dataset):
                 Normalize() if self.normalize else Tensorize()
             ]
         )
+
         return train_transforms, val_transforms
 
     def __len__(self):
@@ -337,6 +338,7 @@ class GreenhouseRGBDSegmentationTrav(data.Dataset):
     def __getitem__(self, index):
         rgb_img = Image.open(self.images[index]).convert('RGB')
         label_img = Image.open(self.masks[index]).convert('L')
+        orig_img = rgb_img.resize(self.size, Image.BILINEAR)
         '''
         Open a depth image using OpenCV instead of PIL to deal with int16 format of the image
         '''
@@ -359,13 +361,15 @@ class GreenhouseRGBDSegmentationTrav(data.Dataset):
         else:
             rgb_img, label_img = self.train_transforms(rgb_img, label_img)
 
+        orig_img = F.to_tensor(orig_img)
+
         # Get a file name
         filename = self.images[index]#.rsplit('/', 1)[1]
 
         if self.use_depth:
-            return rgb_img, label_img, depth_img, filename
+            return {"rgb": rgb_img, "rgb_orig": orig_img, "mask": label_img, "depth": depth_img, "filename": filename}
         else:
-            return rgb_img, label_img, filename
+            return {"rgb": rgb_img, "rgb_orig": orig_img, "mask": label_img, "filename": filename}
 
 class GreenhouseDepth(data.Dataset):
 
