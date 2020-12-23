@@ -169,7 +169,7 @@ def main():
         trav_train_set, batch_size=args.batch_size, shuffle=True,
         num_workers=0, pin_memory=args.pin_memory)
     trav_test_loader = torch.utils.data.DataLoader(
-        trav_test_set, batch_size=len(trav_test_set), shuffle=True,
+        trav_test_set, batch_size=len(trav_test_set), shuffle=False,
         num_workers=0, pin_memory=args.pin_memory)
 
     #
@@ -231,9 +231,9 @@ def main():
 ##    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50, 100], gamma=0.5)
 #
 #    best_miou = 0.0
-    calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, 1.0, writer, device=device)
     c = 1.0
     for epoch in range(0, args.epoch):
+        calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, c, writer, device=device, writer_idx=epoch, histogram=False)
         # Run a training epoch
         train(trav_train_loader, prob_model, seg_model, criterion, device, optimizer, epoch, writer)
         scheduler.step()
@@ -348,7 +348,8 @@ def write_image_to_writer(dataloader, seg_model, prob_model, c, writer, writer_i
 
 #        c = prob_sum_meter.avg
         prob = sigmoid(prob_model(feature)) / c
-        prob /= prob.max()
+        if prob.max() > 1:
+            prob /= prob.max()
 
         masks = torch.reshape(masks, (masks.size(0), -1, masks.size(1), masks.size(2)))
         image_grid = torchvision.utils.make_grid(images.data.cpu()).numpy()
@@ -410,7 +411,8 @@ def update_image_list(tgt_train_lst, image_path_list, label_path_list, depth_pat
 
     return
 
-def calculate_iou_with_different_threshold(dataloader, seg_model, prob_model, c, writer, device='cuda', min_thresh=0.0, max_thresh=1.0, step=0.1):
+def calculate_iou_with_different_threshold(dataloader, seg_model, prob_model, c, writer, 
+    writer_idx=None, device='cuda', min_thresh=0.0, max_thresh=1.0, step=0.1, histogram=True, visualize=True):
     # For logging the training status
     sigmoid = nn.Sigmoid()
     num = round((max_thresh-min_thresh)/step)
@@ -418,8 +420,11 @@ def calculate_iou_with_different_threshold(dataloader, seg_model, prob_model, c,
     for i in range(num):
         iou_sum_meter = AverageMeter()
         iou_sum_meter_list.append(iou_sum_meter)
+    
+    pred_mask_list = [None] * num
 
     ## model for evaluation
+    seg_model.eval()
     prob_model.eval()
 
     with torch.no_grad():
@@ -442,17 +447,44 @@ def calculate_iou_with_different_threshold(dataloader, seg_model, prob_model, c,
             # Calculate IoUs with different thresholds
             for i, thresh in enumerate(np.arange(min_thresh, max_thresh, step)):
                 pred_mask = prob_output > thresh
+                
+                if i_iter == 0:
+                    pred_mask_visualize = torch.zeros(pred_mask.size())
+                    pred_mask_visualize[pred_mask] = 1
+
+                    pred_mask_list[i] = pred_mask_visualize
+
                 union = pred_mask | (masks == 1)
                 int   = pred_mask & (masks == 1)
 
                 iou = torch.div(int.sum().float(), union.sum().float())
 
+                print(pred_mask.sum(), (masks == 1).sum())
+                print(union.size(), int.size())
                 print(union.sum().item(), int.sum().item(), iou.item())
 
                 iou_sum_meter_list[i].update(iou.item(), feature.size(0))
         
+        max_iou = 0.0
+        best_thresh = 0.0
+        best_index = -1 
+        # Calculate the best IoU and output value in writer if histogram is required
         for i, thresh in enumerate(np.arange(min_thresh, max_thresh, step)):
-            writer.add_scalar('traversability_mask/test/iou_per_thresh', iou_sum_meter_list[i].avg, i)
+            if iou_sum_meter_list[i].avg > max_iou:
+                max_iou = iou_sum_meter_list[i].avg
+                best_index = i
+
+            if histogram:
+                writer.add_scalar('traversability_mask/test/iou_per_thresh', iou_sum_meter_list[i].avg, i)
+        
+        # Output the best IoU if histogram is not required
+        if not histogram:
+            writer.add_scalar('traversability_mask/test/best_iou', max_iou, writer_idx)
+
+        # Visualize the mask that achieves the best IoU
+        if visualize:
+            mask_grid = torchvision.utils.make_grid(pred_mask_list[best_index].data.cpu()).numpy()
+            writer.add_image('traversability_mask/test/pred_mask', mask_grid, writer_idx)
 
 if __name__=='__main__':
     main()
