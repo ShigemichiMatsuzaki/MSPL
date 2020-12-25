@@ -38,9 +38,6 @@ from torch.utils.tensorboard import SummaryWriter
 #from metric.iou import IoU
 from tqdm import tqdm
 
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-
 # Default arguments
 RESTORE_FROM = './src_model/gta5/src_model.pth'
 GPU = 0
