@@ -137,7 +137,8 @@ class ExactGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = gpytorch.means.ConstantMean()
-        self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+        self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.keops.RBFKernel())
+#        MaternKernel
 #        self.covar_module = gpytorch.kernels.GridInterpolationKernel(
 #            gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel()),
 #            grid_size=100, num_dims=32,
@@ -295,7 +296,7 @@ def gp_train(features, mask_list, device='cuda'):
     # "Loss" for GPs - the marginal log likelihood
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
-    training_iter = 10
+    training_iter = 50
     for i in range(training_iter):
         # Zero gradients from previous iteration
         optimizer.zero_grad()
@@ -335,6 +336,7 @@ def test(testloader, prob_model, likelihood, seg_model, device, writer):
 
         for i_iter, batch in enumerate(tqdm(testloader)):
             images = batch["rgb"].to(device)
+            images_orig = batch["rgb_orig"].to(device)
             masks = batch["mask"].to(device)
             if args.use_depth:
                 depths = batch["depth"].to(device)
@@ -352,19 +354,31 @@ def test(testloader, prob_model, likelihood, seg_model, device, writer):
 #            masks = masks[:, ih[:, None], iw]
 #            masks = F.interpolate(masks, (8,15), mode='nearest')
 #            masks = torch.squeeze(masks)
-
             feature = feature.transpose(1, 2).transpose(2, 3).reshape((-1, feature.size(1)))
 
+            # Get prediction result
             observed_pred = likelihood(prob_model(feature))
             prob = observed_pred.mean
             prob[prob<0] = 0.0
             prob = prob.reshape((-1, 1, f_ds_size[2], f_ds_size[3]))
             prob = F.interpolate(prob, (f_orig_size[2], f_orig_size[3]), mode='bilinear')
 
-            print(prob.size())
+#            if i_iter == 0:
+            image_tensor = images_orig
+            mask_tensor = masks
+            prob_tensor = prob
+#            else:
+#                image_tensor = torch.cat((image_tensor, images_orig))
+#                mask_tensor = torch.cat((mask_tensor, masks))
+#                prob_tensor = torch.cat((prob_tensor, prob))
 
-            prob_grid = torchvision.utils.make_grid(prob.data.cpu()).numpy()
+            mask_tensor = torch.reshape(mask_tensor, (mask_tensor.size(0), -1, mask_tensor.size(1), mask_tensor.size(2)))
+            image_grid = torchvision.utils.make_grid(image_tensor.data.cpu()).numpy()
+            mask_grid = torchvision.utils.make_grid(mask_tensor.data.cpu()).numpy()
+            prob_grid = torchvision.utils.make_grid(prob_tensor.data.cpu()).numpy()
 
+            writer.add_image('traversability_mask/{}/image'.format('test'), image_grid, i_iter)
+            writer.add_image('traversability_mask/{}/mask'.format('test'), mask_grid, i_iter)
             writer.add_image('traversability_mask/{}/prob'.format('test'), prob_grid, i_iter)
 
     # Write summary
@@ -374,7 +388,7 @@ def test(testloader, prob_model, likelihood, seg_model, device, writer):
     # Test points are regularly spaced along [0,1]
     # Make predictions by feeding model through likelihood
 
-    write_image_to_writer(testloader, seg_model, prob_model, 1.0, writer, 0, mode='test', device=device)
+#    write_image_to_writer(testloader, seg_model, prob_model, 1.0, writer, 0, mode='test', device=device)
 
 #    label_list = mask_list.tolist() # (B,H,W) => (B*H*W)
 #    writer.add_embedding(feature, metadata=label_list)
