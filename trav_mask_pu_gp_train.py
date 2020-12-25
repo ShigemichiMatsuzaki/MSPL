@@ -38,6 +38,9 @@ from torch.utils.tensorboard import SummaryWriter
 #from metric.iou import IoU
 from tqdm import tqdm
 
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
 # Default arguments
 RESTORE_FROM = './src_model/gta5/src_model.pth'
 GPU = 0
@@ -134,11 +137,14 @@ def get_arguments():
 args = get_arguments()
 
 class ExactGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood):
+    def __init__(self, train_x, train_y, likelihood, kernel_type='rbf'):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = gpytorch.means.ConstantMean()
-        self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.keops.RBFKernel())
-#        MaternKernel
+        if kernel_type=='matern':
+            self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(nu=2.5))
+        else:
+            self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+#        
 #        self.covar_module = gpytorch.kernels.GridInterpolationKernel(
 #            gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel()),
 #            grid_size=100, num_dims=32,
@@ -192,49 +198,25 @@ def main():
     #
     # Models
     #
-    # Label Probability
-#    from model.classification.label_prob_estimator import LabelProbEstimator
-#    in_channels = 32 if args.feature_construction == 'concat' else 16
-#    prob_model = LabelProbEstimator(in_channels=in_channels, spatial=args.spatial)
-#    prob_model.to(device)
-
     # Segmentation
     from model.segmentation.espdnet_ue import espdnetue_seg2
     args.weights = args.restore_from
     seg_model = espdnetue_seg2(args, load_entire_weights=True, fix_pyr_plane_proj=True)
     seg_model.to(device)
 
-#    if args.optimizer == 'SGD':
-#        optimizer = optim.SGD(
-#            prob_model.parameters(),
-#            lr=args.learning_rate,
-#            momentum=args.momentum,
-#            weight_decay=args.weight_decay)            
-#    else:
-#        optimizer = optim.Adam(
-#            prob_model.parameters(),
-#            lr=args.learning_rate,
-#            weight_decay=args.weight_decay)
-#
-#    scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=args.learning_rate, max_lr=args.learning_rate*10,
-#                                     step_size_up=10, step_size_down=20, cycle_momentum=True if args.optimizer == 'SGD' else False)
-    
+    #
+    # Training
+    #
     trainset = get_dataset(trav_train_loader, seg_model, device='cuda')
+    (U, S, V) = pca(trainset["features"])
     prob_model = gp_train(trainset["features"], trainset["mask_list"], device)
-    test(trav_test_loader, prob_model["model"], prob_model["likelihood"], seg_model, device, writer)
-##    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50, 100], gamma=0.5)
-#
-#    best_miou = 0.0
-#    c = 1.0
-#    for epoch in range(0, args.epoch):
-#        calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, c, writer, device=device, writer_idx=epoch, histogram=False)
-#        # Run a training epoch
-#        train(trav_train_loader, prob_model, seg_model, criterion, device, optimizer, epoch, writer)
-#        scheduler.step()
-#
-#        c = test(trav_test_loader, prob_model, seg_model, criterion, device, epoch, writer)
-    
-#    calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, c, writer, device=device)
+    test(trav_test_loader, prob_model["model"], prob_model["likelihood"], seg_model, V, device, writer)
+
+def pca(data):
+    print(data.size())
+    (U, S, V) = torch.pca_lowrank(data)
+
+    return (U, S, V)
 
 def get_dataset(trainloader, seg_model, device='cuda'):
     #
@@ -243,21 +225,18 @@ def get_dataset(trainloader, seg_model, device='cuda'):
     with torch.no_grad():
         with tqdm(total=len(trainloader)) as pbar:
             for i_iter, batch in enumerate(tqdm(trainloader)):
-    #            feature = batch['feature'].to(device)
-    #            label = batch['label'].to(device)
                 images = batch["rgb"].to(device)
                 masks = batch["mask"].to(device)
 
                 # Output probability
-                # output = model(feature, label)
                 output_dict = get_output(seg_model, images)
                 feature = output_dict['feature']
 
                 # Downsample features
-                feature = F.interpolate(feature, (5,9), mode='nearest')
+                feature = F.interpolate(feature, (4,7), mode='nearest')
                 # Downsample masks
-                ih = torch.linspace(0, masks.size(1)-1, 5).long()
-                iw = torch.linspace(0, masks.size(2)-1, 9).long()
+                ih = torch.linspace(0, masks.size(1)-1, 4).long()
+                iw = torch.linspace(0, masks.size(2)-1, 7).long()
                 masks = masks[:, ih[:, None], iw]
     #            masks = F.interpolate(masks, (8,15), mode='nearest')
     #            masks = torch.squeeze(masks)
@@ -314,10 +293,18 @@ def gp_train(features, mask_list, device='cuda'):
 
     return {"model": model, "likelihood": likelihood}
 
-def visualize_embedding():
-    pass
+def visualize_gp_function(data, prob, label, V, writer):
+    print("visualize_gp_function")
+    # Calculate two principal components
+    pca_data = torch.matmul(data, V[:,:2])
 
-def test(testloader, prob_model, likelihood, seg_model, device, writer):
+    plot_data = torch.cat((pca_data, prob.unsqueeze(dim=1)), dim=1)
+
+    print(plot_data.size(), label.size())
+    label = label.tolist() # (B,H,W) => (B*H*W)
+    writer.add_embedding(plot_data, metadata=label)
+
+def test(testloader, prob_model, likelihood, seg_model, V, device, writer):
     """Create the model and start the evaluation process."""
     # For logging the training status
     sigmoid = nn.Sigmoid()
@@ -349,9 +336,9 @@ def test(testloader, prob_model, likelihood, seg_model, device, writer):
             feature = F.interpolate(feature, (128,240), mode='nearest')
             f_ds_size = feature.size()
             # Downsample masks
-#            ih = torch.linspace(0, masks.size(1)-1, 128).long()
-#            iw = torch.linspace(0, masks.size(2)-1, 15).long()
-#            masks = masks[:, ih[:, None], iw]
+            ih = torch.linspace(0, masks.size(1)-1, 128).long()
+            iw = torch.linspace(0, masks.size(2)-1, 240).long()
+            masks = masks[:, ih[:, None], iw]
 #            masks = F.interpolate(masks, (8,15), mode='nearest')
 #            masks = torch.squeeze(masks)
             feature = feature.transpose(1, 2).transpose(2, 3).reshape((-1, feature.size(1)))
@@ -359,49 +346,36 @@ def test(testloader, prob_model, likelihood, seg_model, device, writer):
             # Get prediction result
             observed_pred = likelihood(prob_model(feature))
             prob = observed_pred.mean
-            prob[prob<0] = 0.0
-            prob = prob.reshape((-1, 1, f_ds_size[2], f_ds_size[3]))
-            prob = F.interpolate(prob, (f_orig_size[2], f_orig_size[3]), mode='bilinear')
+            prob_int = prob.clone()
+            prob_int[prob_int<0] = 0.0
+            prob_int = prob_int.reshape((-1, 1, f_ds_size[2], f_ds_size[3]))
+            prob_int = F.interpolate(prob_int, (f_orig_size[2], f_orig_size[3]), mode='bilinear')
 
-#            if i_iter == 0:
-            image_tensor = images_orig
-            mask_tensor = masks
-            prob_tensor = prob
-#            else:
-#                image_tensor = torch.cat((image_tensor, images_orig))
-#                mask_tensor = torch.cat((mask_tensor, masks))
-#                prob_tensor = torch.cat((prob_tensor, prob))
+            if i_iter == 0:
+                image_tensor = images_orig
+                mask_tensor = masks
+                prob_tensor = prob_int
+            else:
+                image_tensor = torch.cat((image_tensor, images_orig))
+                mask_tensor = torch.cat((mask_tensor, masks))
+                prob_tensor = torch.cat((prob_tensor, prob_int))
 
-            mask_tensor = torch.reshape(mask_tensor, (mask_tensor.size(0), -1, mask_tensor.size(1), mask_tensor.size(2)))
-            image_grid = torchvision.utils.make_grid(image_tensor.data.cpu()).numpy()
-            mask_grid = torchvision.utils.make_grid(mask_tensor.data.cpu()).numpy()
-            prob_grid = torchvision.utils.make_grid(prob_tensor.data.cpu()).numpy()
+        mask_tensor = torch.reshape(mask_tensor, (mask_tensor.size(0), -1, mask_tensor.size(1), mask_tensor.size(2)))
+        image_grid = torchvision.utils.make_grid(image_tensor.data.cpu()).numpy()
+        mask_grid = torchvision.utils.make_grid(mask_tensor.data.cpu()).numpy()
+        prob_grid = torchvision.utils.make_grid(prob_tensor.data.cpu()).numpy()
 
-            writer.add_image('traversability_mask/{}/image'.format('test'), image_grid, i_iter)
-            writer.add_image('traversability_mask/{}/mask'.format('test'), mask_grid, i_iter)
-            writer.add_image('traversability_mask/{}/prob'.format('test'), prob_grid, i_iter)
+        writer.add_image('traversability_mask/{}/image'.format('test'), image_grid, i_iter)
+        writer.add_image('traversability_mask/{}/mask'.format('test'), mask_grid, i_iter)
+        writer.add_image('traversability_mask/{}/prob'.format('test'), prob_grid, i_iter)
 
-    # Write summary
-#    feature = feature[mask_list == 1]
-#    mask_list = mask_list[mask_list == 1]
-
-    # Test points are regularly spaced along [0,1]
-    # Make predictions by feeding model through likelihood
-
-#    write_image_to_writer(testloader, seg_model, prob_model, 1.0, writer, 0, mode='test', device=device)
-
-#    label_list = mask_list.tolist() # (B,H,W) => (B*H*W)
-#    writer.add_embedding(feature, metadata=label_list)
+    visualize_gp_function(feature, prob, masks.squeeze().flatten(), V, writer)
 
 def write_image_to_writer(dataloader, seg_model, prob_model, c, writer, writer_idx, mode='test', device='cuda'):
     # Visualize
-    sigmoid = nn.Sigmoid()
-#    prob_sum_meter = AverageMeter()
-
     batch = iter(dataloader).next()
 
     with torch.no_grad():
-#        images = batch["rgb"].to(device)
         images = batch["rgb_orig"].to(device)
         masks = batch["mask"].to(device)
         if args.use_depth:
@@ -411,19 +385,12 @@ def write_image_to_writer(dataloader, seg_model, prob_model, c, writer, writer_i
 
         feature = output_dict['feature']
 
-#        c = prob_sum_meter.avg
-#        prob = sigmoid(prob_model(feature)) / c
-#        if prob.max() > 1:
-#            prob /= prob.max()
-
         masks = torch.reshape(masks, (masks.size(0), -1, masks.size(1), masks.size(2)))
         image_grid = torchvision.utils.make_grid(images.data.cpu()).numpy()
         mask_grid = torchvision.utils.make_grid(masks.data.cpu()).numpy()
-#        prob_grid = torchvision.utils.make_grid(prob.data.cpu()).numpy()
 
         writer.add_image('traversability_mask/{}/image'.format(mode), image_grid, writer_idx)
         writer.add_image('traversability_mask/{}/mask'.format(mode), mask_grid, writer_idx)
-#        writer.add_image('traversability_mask/{}/prob'.format(mode), prob_grid, writer_idx)
 
 def get_output(model, image, model_name='espdnetue', device='cuda'):
     softmax2d = nn.Softmax2d()
