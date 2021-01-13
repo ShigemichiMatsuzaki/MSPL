@@ -37,6 +37,8 @@ from loss_fns.segmentation_loss import SelectiveBCE
 from torch.utils.tensorboard import SummaryWriter
 #from metric.iou import IoU
 from tqdm import tqdm
+import matplotlib
+import matplotlib.pyplot as plt
 
 # Default arguments
 RESTORE_FROM = './src_model/gta5/src_model.pth'
@@ -186,7 +188,7 @@ def main():
     # Dataloader for generating the pseudo-labels
     #
     trav_train_loader = torch.utils.data.DataLoader(
-        trav_train_set, batch_size=args.batch_size, shuffle=True,
+        trav_train_set, batch_size=1, shuffle=True,
         num_workers=0, pin_memory=args.pin_memory)
     trav_test_loader = torch.utils.data.DataLoader(
         trav_test_set, batch_size=1, shuffle=False,
@@ -205,9 +207,21 @@ def main():
     # Training
     #
     trainset = get_dataset(trav_train_loader, seg_model, device='cuda')
+    feature_mean = trainset["feature_mean"]
+    mask_mean = trainset["mask_mean"]
     (U, S, V) = pca(trainset["features"])
-    prob_model = gp_train(trainset["features"], trainset["mask_list"], device)
-    test(trav_test_loader, prob_model["model"], prob_model["likelihood"], seg_model, V, device, writer)
+    train_feature = trainset["features"] - feature_mean
+    train_mask = trainset["mask_list"] - mask_mean
+
+    print(feature_mean, mask_mean)
+
+    prob_model = gp_train(train_feature, train_mask, device)
+
+    #
+    # Test
+    #
+    test(trav_test_loader, prob_model["model"], prob_model["likelihood"], seg_model, V, device, writer, feature_mean, mask_mean, 'test')
+    test(trav_train_loader, prob_model["model"], prob_model["likelihood"], seg_model, V, device, writer, feature_mean, mask_mean, 'train')
 
 def pca(data):
     print(data.size())
@@ -248,7 +262,11 @@ def get_dataset(trainloader, seg_model, device='cuda'):
     
     seg_model = seg_model.cpu()
 
-    return {"features": features, "mask_list": mask_list}
+    mask_list = mask_list.float()
+    feature_mean = features.mean(dim=-2, keepdim=True)
+    mask_mean = mask_list.mean(dim=-1, keepdim=True)
+
+    return {"features": features, "mask_list": mask_list, "feature_mean": feature_mean, "mask_mean": mask_mean}
 
 def gp_train(features, mask_list, device='cuda'):
 
@@ -273,7 +291,7 @@ def gp_train(features, mask_list, device='cuda'):
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
     training_iter = 50
-    for i in range(training_iter):
+    for i in tqdm(range(training_iter)):
         # Zero gradients from previous iteration
         optimizer.zero_grad()
         # Output from model
@@ -281,27 +299,40 @@ def gp_train(features, mask_list, device='cuda'):
         # Calc loss and backprop gradients
         loss = -mll(output, mask_list)
         loss.backward()
-        print('Iter %d/%d - Loss: %.3f   lengthscale: %.3f   noise: %.3f' % (
-            i + 1, training_iter, loss.item(),
-            model.covar_module.base_kernel.lengthscale.item(),
-            model.likelihood.noise.item()
-        ))
+#        print('Iter %d/%d - Loss: %.3f   lengthscale: %.3f   noise: %.3f' % (
+#            i + 1, training_iter, loss.item(),
+#            model.covar_module.base_kernel.lengthscale.item(),
+#            model.likelihood.noise.item()
+#        ))
         optimizer.step()
 
     return {"model": model, "likelihood": likelihood}
 
-def visualize_gp_function(data, prob, label, V, writer):
+def visualize_gp_function(data, prob, label, V, writer, mode='test'):
     print("visualize_gp_function")
     # Calculate two principal components
     pca_data = torch.matmul(data, V[:,:2])
 
+#    prob = torch.sigmoid(prob)
     plot_data = torch.cat((pca_data, prob.unsqueeze(dim=1)), dim=1)
 
-    print(plot_data.size(), label.size())
+    print(plot_data[:,2].min(), plot_data[:,2].max())
     label = label.tolist() # (B,H,W) => (B*H*W)
-    writer.add_embedding(plot_data, metadata=label)
+#     writer.add_embedding(plot_data, metadata=label)
 
-def test(testloader, prob_model, likelihood, seg_model, V, device, writer):
+    fig = plt.figure(figsize=(10,10))
+
+    ax = fig.add_subplot(111, projection='3d')
+
+    X1 = plot_data[:,0].cpu().numpy()
+    X2 = plot_data[:,1].cpu().numpy()
+    Y_plot = plot_data[:,2].cpu().numpy()
+    surf = ax.scatter(X1, Y_plot, c=label, s=10)
+
+    ax.set_title("Surface Plot")
+    plt.savefig("gp_{}_plot.png".format(mode), bbox_inches = "tight")
+
+def test(testloader, prob_model, likelihood, seg_model, V, device, writer, feature_mean=0.0, mask_mean=0.0, mode='test', max_image=100):
     """Create the model and start the evaluation process."""
     # For logging the training status
     sigmoid = nn.Sigmoid()
@@ -319,6 +350,9 @@ def test(testloader, prob_model, likelihood, seg_model, V, device, writer):
         # Calculate a constant c
 
         for i_iter, batch in enumerate(tqdm(testloader)):
+            if i_iter == max_image:
+                break
+
             images = batch["rgb"].to(device)
             images_orig = batch["rgb_orig"].to(device)
             masks = batch["mask"].to(device)
@@ -362,11 +396,13 @@ def test(testloader, prob_model, likelihood, seg_model, V, device, writer):
         mask_grid = torchvision.utils.make_grid(mask_tensor.data.cpu()).numpy()
         prob_grid = torchvision.utils.make_grid(prob_tensor.data.cpu()).numpy()
 
-        writer.add_image('traversability_mask/{}/image'.format('test'), image_grid, i_iter)
-        writer.add_image('traversability_mask/{}/mask'.format('test'), mask_grid, i_iter)
-        writer.add_image('traversability_mask/{}/prob'.format('test'), prob_grid, i_iter)
+        writer.add_image('traversability_mask/{}/image'.format(mode), image_grid, i_iter)
+        writer.add_image('traversability_mask/{}/mask'.format(mode), mask_grid, i_iter)
+        writer.add_image('traversability_mask/{}/prob'.format(mode), prob_grid, i_iter)
 
-    visualize_gp_function(feature, prob, masks.squeeze().flatten(), V, writer)
+    feature += feature_mean
+    prob += mask_mean
+    visualize_gp_function(feature, prob, masks.squeeze().flatten(), V, writer, mode)
 
 def write_image_to_writer(dataloader, seg_model, prob_model, c, writer, writer_idx, mode='test', device='cuda'):
     # Visualize
