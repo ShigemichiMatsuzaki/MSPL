@@ -1,17 +1,12 @@
 import torch
+from torchvision import transforms
 import argparse
 import datetime
-from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentation, GREENHOUSE_CLASS_LIST
 
+from data_loader.segmentation.greenhouse import GreenhouseRGBDSegmentationTrav, GREENHOUSE_CLASS_LIST
 from commons.general_details import segmentation_models, segmentation_datasets
 
 # UI
-from tkinter import *
-from PIL import Image, ImageTk
-
-from tkinter import *
-from PIL import Image, ImageTk
-
 from tkinter import *
 from PIL import Image, ImageTk
 
@@ -26,7 +21,11 @@ parser.add_argument('--freeze-bn', action='store_true', default=False, help='Fre
 
 # dataset and result directories
 parser.add_argument('--dataset', type=str, default='greenhouse', choices=segmentation_datasets, help='Datasets')
-parser.add_argument('--weights', type=str, default='/tmp/runs/uest/for-paper/trav/model_espdnetue_greenhouse/s_2.0_res_480_uest_rgb_os_camvid_cityscapes_forest_ue/20201204-152737/espdnetue_ep_1.pth', help='Name of weight file to load')
+parser.add_argument('--weights', type=str, default='./espdnetue_ssm.pth', help='Name of weight file to load')
+parser.add_argument('--data-test-list', type=str, default='./vision_datasets/traversability_mask/greenhouse_a_test_new.lst',
+                    help='Location to save the results')
+parser.add_argument('--trav-module-weights', default='./espdnetue_tem.pth', 
+                    type=str, help='Weight file of traversability module')
 # model related params
 parser.add_argument('--model', default='espdnetue', 
                     help='Which model? basic= basic CNN model, res=resnet style)')
@@ -43,20 +42,23 @@ parser.add_argument('--dense-fuse', default=False, type=bool, help='Use depth')
 parser.add_argument('--label-conversion', default=False, type=bool, help='Use label conversion in CamVid')
 parser.add_argument('--use-uncertainty', default=True, type=bool, help='Use auxiliary loss')
 parser.add_argument('--normalize', default=False, type=bool, help='Use auxiliary loss')
-parser.add_argument('--trav-module-weights', default='/tmp/runs/uest/trav/model_espdnetue_greenhouse/20210115-145605/espdnetue_best.pth', 
-                    type=str, help='Weight file of traversability module')
 
 args = parser.parse_args()
 
 class App(Frame):
-    def __init__(self, master):
+    def __init__(self, master, model, dataset):
         Frame.__init__(self, master)
+        self.master.geometry("1500x600")
+
+        self.model = model.to('cuda')
+        self.dataset = dataset
+        self.index = 0
+
+        # Define the window
         self.frame1 = Frame(self)
         self.frame2 = Frame(self)
         self.frame3 = Frame(self)
-        self.original = Image.open('26_0_000000.png')
 
-        self.image = ImageTk.PhotoImage(self.original)
         self.display = Canvas(self.frame1)
 
         # Button to display the previous image
@@ -65,13 +67,16 @@ class App(Frame):
         self.button1.bind("<Button-1>", self.show_previous_image)
 
         # Slide bar to change the threshold
-        self.xscale = Scale(self.frame2, from_=1, to=1000, orient=HORIZONTAL, command=self.resize)
+        self.xscale = Scale(self.frame2, from_=0, to=100, orient=HORIZONTAL, command=self.resize)
+        self.xscale.set(50)
         self.xscale.grid(row=0, column=1)
 
         # Button to display the next image
         self.button2 = Button(self.frame2, text='Next')
         self.button2.grid(row=0, column=2)
         self.button2.bind("<Button-1>", self.show_next_image)
+
+        self.update_current_images()
 
         self.display.pack(fill=BOTH, expand=1)
 #        self.xscale.pack()
@@ -80,18 +85,74 @@ class App(Frame):
         self.frame2.pack()
         self.bind("<Configure>", self.resize)
 
+    def get_image(self, index=0):
+        image_tensor = self.dataset[index]['rgb']
+        image_pil = transforms.ToPILImage()(image_tensor)
+
+        return {'pil': image_pil, 'tensor': image_tensor}
+    
+    def get_output(self, image_tensor):
+        image_tensor = torch.unsqueeze(image_tensor, dim=0)
+        output_tensor = self.model(image_tensor.to('cuda'))[2]
+        output_tensor = torch.sigmoid(output_tensor) / 0.3
+        output_tensor = torch.squeeze(output_tensor).cpu()
+
+#        output_tensor[output_tensor > 1.0] = 1.0
+        if output_tensor.max() > 1:
+            output_tensor /= output_tensor.max()
+
+        output_pil = transforms.ToPILImage()(output_tensor)
+
+        self.current_output_tensor = output_tensor
+
+        return {'pil': output_pil, 'tensor': output_tensor}
+
+    def update_current_images(self, index=0):
+        # Get image tensor
+        images = self.get_image(self.index)
+        self.current_image_pil = images['pil']
+        self.current_image_tensor = images['tensor']
+
+        outputs = self.get_output(self.current_image_tensor)
+        self.current_prob_tensor = outputs['tensor']
+        self.current_prob_pil = outputs['pil']
+        self.current_binary_pil = self.get_binary_image(self.current_prob_tensor, self.xscale.get() / 100)
+
+        self.tk_image = ImageTk.PhotoImage(self.current_image_pil)
+        self.tk_prob = ImageTk.PhotoImage(self.current_prob_pil)
+        self.tk_binary = ImageTk.PhotoImage(self.current_binary_pil)
+
+        image_width = self.current_image_pil.size[0]
+        self.display.create_image(0, 0, anchor='nw', image=self.tk_image, tags="IMG1")
+        self.display.create_image(image_width+10, 0, anchor='nw', image=self.tk_prob, tags="IMG2")
+        self.display.create_image(image_width * 2 + 20, 0, anchor='nw', image=self.tk_binary, tags="IMG3")
+
     def show_previous_image(self, *args):
-        print("show previous image")
+        self.index = (self.index - 1) % len(self.dataset)
+
+        self.update_current_images(index=self.index)
 
     def show_next_image(self, *args):
-        print("show next image")
+        self.index = (self.index + 1) % len(self.dataset)
+
+        self.update_current_images(index=self.index)
+
+    def get_binary_image(self, prob_tensor, threshold=0.5):
+        binary = torch.zeros_like(prob_tensor)
+        binary[prob_tensor > threshold] = 1.0
+        binary_pil = transforms.ToPILImage()(binary)
+
+        return binary_pil
 
     def resize(self, *args):
-        size = (self.xscale.get(), self.xscale.get())
-        resized = self.original.resize(size,Image.ANTIALIAS)
-        self.image = ImageTk.PhotoImage(resized)
-        self.display.delete("IMG")
-        self.display.create_image(self.display.winfo_width()/2, self.display.winfo_height()/2, anchor=CENTER, image=self.image, tags="IMG")
+        binary_pil = self.get_binary_image(self.current_prob_tensor, self.xscale.get() / 100)
+#        size = (self.xscale.get(), self.xscale.get())
+#        resized = self.original.resize(size,Image.ANTIALIAS)
+        self.tk_binary = ImageTk.PhotoImage(binary_pil)
+        self.display.delete("IMG3")
+
+        image_width = binary_pil.size[0]
+        self.display.create_image(image_width * 2 + 20, 0, anchor='nw', image=self.tk_binary, tags="IMG3")
 
 # Main
 def main():
@@ -99,14 +160,13 @@ def main():
     args.classes = len(GREENHOUSE_CLASS_LIST)
     from model.segmentation.espdnet_ue_traversability import espdnetue_seg
     model = espdnetue_seg(args, load_entire_weights=True, fix_pyr_plane_proj=True, spatial=False)
+    model.eval()
 
     # Import a dataset
-    val_dataset = GreenhouseRGBDSegmentation(root='./vision_datasets/greenhouse/', list_name=args.val_list, use_traversable=False, 
-                                             train=False, size=crop_size, use_depth=args.use_depth,
-                                             normalize=args.normalize)
+    trav_test_set = GreenhouseRGBDSegmentationTrav(list_name=args.data_test_list, use_depth=args.use_depth)
 
     root = Tk()
-    app = App(root)
+    app = App(root, model, trav_test_set)
     app.mainloop()
 
 if __name__=='__main__':
