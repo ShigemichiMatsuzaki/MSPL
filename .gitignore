@@ -6,3 +6,4 @@ results_segmentation/
 pretrained_models/
 *.png
 *.pt
+*.pth
