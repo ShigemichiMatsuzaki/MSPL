@@ -227,18 +227,38 @@ def main():
             weight_decay=args.weight_decay)
 
     scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=args.learning_rate, max_lr=args.learning_rate*10,
-                                     step_size_up=10, step_size_down=20, cycle_momentum=True if args.optimizer == 'SGD' else False)
+                                            step_size_up=10, step_size_down=20, cycle_momentum=True if args.optimizer == 'SGD' else False)
 ##    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50, 100], gamma=0.5)
 #
 #    best_miou = 0.0
     c = 1.0
+    loss_old = 1000000
     for epoch in range(0, args.epoch):
-        calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, c, writer, device=device, writer_idx=epoch, histogram=False)
+#        calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, c, writer, device=device, writer_idx=epoch, histogram=False)
+        calculate_iou(trav_test_loader, seg_model, prob_model, c, writer, device=device, writer_idx=epoch)
         # Run a training epoch
         train(trav_train_loader, prob_model, seg_model, criterion, device, optimizer, epoch, writer)
         scheduler.step()
 
-        c = test(trav_test_loader, prob_model, seg_model, criterion, device, epoch, writer)
+        ret_dict = test(trav_test_loader, prob_model, seg_model, criterion, device, epoch, writer)
+        c = ret_dict["c"]
+        loss = ret_dict["loss"]
+
+        extra_info_ckpt = '{}'.format(args.model)
+        weights_dict = prob_model.state_dict()
+        if loss < loss_old:
+            print("Save weights")
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.model,
+                'state_dict': weights_dict,
+                'best_miou': 0.0,
+                'optimizer': optimizer.state_dict(),
+            }, loss < loss_old, save_path, extra_info_ckpt)           
+
+            loss_old = loss
+        
+        print("c = {}".format(c))
     
     calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, c, writer, device=device)
 
@@ -326,7 +346,7 @@ def test(testloader, prob_model, seg_model, criterion, device, writer_idx, write
     writer.add_scalar('traversability_mask/test/loss', losses.avg, writer_idx)
     write_image_to_writer(testloader, seg_model, prob_model, c, writer, writer_idx, mode='test', device=device)
 
-    return c
+    return {"c": c, "loss": losses.avg}
 
 def write_image_to_writer(dataloader, seg_model, prob_model, c, writer, writer_idx, mode='test', device='cuda'):
     # Visualize
@@ -459,9 +479,9 @@ def calculate_iou_with_different_threshold(dataloader, seg_model, prob_model, c,
 
                 iou = torch.div(int.sum().float(), union.sum().float())
 
-                print(pred_mask.sum(), (masks == 1).sum())
-                print(union.size(), int.size())
-                print(union.sum().item(), int.sum().item(), iou.item())
+#                print(pred_mask.sum(), (masks == 1).sum())
+#                print(union.size(), int.size())
+#                print(union.sum().item(), int.sum().item(), iou.item())
 
                 iou_sum_meter_list[i].update(iou.item(), feature.size(0))
         
@@ -484,6 +504,62 @@ def calculate_iou_with_different_threshold(dataloader, seg_model, prob_model, c,
         # Visualize the mask that achieves the best IoU
         if visualize:
             mask_grid = torchvision.utils.make_grid(pred_mask_list[best_index].data.cpu()).numpy()
+            writer.add_image('traversability_mask/test/pred_mask', mask_grid, writer_idx)
+
+def calculate_iou(dataloader, seg_model, prob_model, c, writer, 
+    writer_idx=None, device='cuda', visualize=True):
+    # For logging the training status
+    sigmoid = nn.Sigmoid()
+    iou_sum_meter = AverageMeter()
+    
+    ## model for evaluation
+    seg_model.eval()
+    prob_model.eval()
+
+    # thresh = c / 2.0
+    thresh = 0.5
+    with torch.no_grad():
+        # Calculate a constant c
+
+        # For each data batch
+        for i_iter, batch in enumerate(tqdm(dataloader)):
+            images = batch["rgb"].to(device)
+            masks = batch["mask"].to(device)
+            masks = torch.reshape(masks, (masks.size(0), -1, masks.size(1), masks.size(2)))
+            if args.use_depth:
+                depths = batch["depth"].to(device)
+
+            output_dict = get_output(seg_model, images)
+            feature = output_dict['feature']
+            prob_output = prob_model(feature)
+            prob_output = sigmoid(prob_output) / c
+            # prob_output /= prob_output.max()
+            prob_output[prob_output >= 1] = 1.0
+
+            # Calculate IoUs with different thresholds
+            pred_mask = prob_output > thresh
+                
+            if i_iter == 0:
+                pred_mask_visualize = torch.zeros(pred_mask.size())
+                pred_mask_visualize[pred_mask] = 1
+
+                union = pred_mask | (masks == 1)
+                int   = pred_mask & (masks == 1)
+
+                iou = torch.div(int.sum().float(), union.sum().float())
+
+#                print(pred_mask.sum(), (masks == 1).sum())
+#                print(union.size(), int.size())
+#                print(union.sum().item(), int.sum().item(), iou.item())
+
+                iou_sum_meter.update(iou.item(), feature.size(0))
+        
+        # Output the best IoU if histogram is not required
+        writer.add_scalar('traversability_mask/test/best_iou', iou.item(), writer_idx)
+
+        # Visualize the mask that achieves the best IoU
+        if visualize:
+            mask_grid = torchvision.utils.make_grid(pred_mask_visualize.data.cpu()).numpy()
             writer.add_image('traversability_mask/test/pred_mask', mask_grid, writer_idx)
 
 if __name__=='__main__':
