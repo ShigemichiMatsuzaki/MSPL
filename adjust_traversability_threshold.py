@@ -97,9 +97,9 @@ class App(Frame):
         output_tensor = torch.sigmoid(output_tensor) / 0.3
         output_tensor = torch.squeeze(output_tensor).cpu()
 
-#        output_tensor[output_tensor > 1.0] = 1.0
-        if output_tensor.max() > 1:
-            output_tensor /= output_tensor.max()
+        output_tensor[output_tensor > 1.0] = 1.0
+#        if output_tensor.max() > 1:
+#            output_tensor /= output_tensor.max()
 
         output_pil = transforms.ToPILImage()(output_tensor)
 
