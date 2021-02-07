@@ -126,6 +126,7 @@ def get_arguments():
                         help="Whether to remove label images etc. after the training")
     parser.add_argument('--spatial', default=False, type=bool, help='Use 3x3 kernel or 1x1 kernel in probability estimation')
     parser.add_argument('--feature-construction', default='concat', type=str, help='Use 3x3 kernel or 1x1 kernel in probability estimation')
+    parser.add_argument('--lr-scheduling', default='cyclic', type=str, help='')
 
     return parser.parse_args()
 
@@ -226,9 +227,11 @@ def main():
             lr=args.learning_rate,
             weight_decay=args.weight_decay)
 
-    scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=args.learning_rate, max_lr=args.learning_rate*10,
-                                            step_size_up=10, step_size_down=20, cycle_momentum=True if args.optimizer == 'SGD' else False)
-##    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50, 100], gamma=0.5)
+    if args.lr_scheduling == "cyclic":
+        scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=args.learning_rate, max_lr=args.learning_rate*10,
+                                                step_size_up=10, step_size_down=20, cycle_momentum=True if args.optimizer == 'SGD' else False)
+    else:
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50, 150], gamma=0.5)
 #
 #    best_miou = 0.0
     c = 1.0
@@ -244,7 +247,7 @@ def main():
         c = ret_dict["c"]
         loss = ret_dict["loss"]
 
-        extra_info_ckpt = '{}'.format(args.model)
+        extra_info_ckpt = '{}_c_{}'.format(args.model, c)
         weights_dict = prob_model.state_dict()
         if loss < loss_old:
             print("Save weights")
@@ -260,7 +263,7 @@ def main():
         
         print("c = {}".format(c))
     
-    calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, c, writer, device=device)
+#    calculate_iou_with_different_threshold(trav_test_loader, seg_model, prob_model, c, writer, device=device)
 
 def train(trainloader, prob_model, seg_model, criterion, device, optimizer, writer_idx, writer=None):
     """Create the model and start the training."""
@@ -347,6 +350,19 @@ def test(testloader, prob_model, seg_model, criterion, device, writer_idx, write
     write_image_to_writer(testloader, seg_model, prob_model, c, writer, writer_idx, mode='test', device=device)
 
     return {"c": c, "loss": losses.avg}
+
+def get_metrics(gt, pred, thresh=0.5):
+    pred_mask = torch.zeros_like(pred)
+    pred_mask[pred_mask > 0.5]
+    TP = ((gt == 1)&(pred==1)).sum().item()
+    FN = ((gt == 1)).sum().item() - TP
+    FP = ((pred==1)).sum().item() - TP
+
+    acc = (TP + TN) / torch.numel(gt)
+    pre = TP / (TP + FP)
+    rec = TP / (TP + FN)
+
+    return acc, pre, rec
 
 def write_image_to_writer(dataloader, seg_model, prob_model, c, writer, writer_idx, mode='test', device='cuda'):
     # Visualize
@@ -475,9 +491,18 @@ def calculate_iou_with_different_threshold(dataloader, seg_model, prob_model, c,
                     pred_mask_list[i] = pred_mask_visualize
 
                 union = pred_mask | (masks == 1)
-                int   = pred_mask & (masks == 1)
+                inter = pred_mask & (masks == 1)
+                TP = ((gt == 1)&(pred==1)).sum().item()
+                FN = ((gt == 1)).sum().item() - TP
+                FP = ((pred==1)).sum().item() - TP
+            
+                acc = (TP + TN) / torch.numel(gt)
+                pre = TP / (TP + FP)
+                rec = TP / (TP + FN)
 
-                iou = torch.div(int.sum().float(), union.sum().float())
+
+
+                iou = torch.div(inter.sum().float(), union.sum().float())
 
 #                print(pred_mask.sum(), (masks == 1).sum())
 #                print(union.size(), int.size())
@@ -507,17 +532,20 @@ def calculate_iou_with_different_threshold(dataloader, seg_model, prob_model, c,
             writer.add_image('traversability_mask/test/pred_mask', mask_grid, writer_idx)
 
 def calculate_iou(dataloader, seg_model, prob_model, c, writer, 
-    writer_idx=None, device='cuda', visualize=True):
+    thresh = 0.5 , writer_idx=None, device='cuda', visualize=True):
     # For logging the training status
     sigmoid = nn.Sigmoid()
     iou_sum_meter = AverageMeter()
+    acc_sum_meter = AverageMeter()
+    pre_sum_meter = AverageMeter()
+    rec_sum_meter = AverageMeter()
     
     ## model for evaluation
     seg_model.eval()
     prob_model.eval()
 
     # thresh = c / 2.0
-    thresh = 0.5
+    
     with torch.no_grad():
         # Calculate a constant c
 
@@ -543,19 +571,35 @@ def calculate_iou(dataloader, seg_model, prob_model, c, writer,
                 pred_mask_visualize = torch.zeros(pred_mask.size())
                 pred_mask_visualize[pred_mask] = 1
 
-                union = pred_mask | (masks == 1)
-                int   = pred_mask & (masks == 1)
+            union = pred_mask | (masks == 1)
+            TP = (pred_mask & (masks == 1)).sum().item()
+            FP = (pred_mask).sum().item() - TP
+            FN = (masks==1).sum().item() - TP
+            TN = (~union).sum().item()
 
-                iou = torch.div(int.sum().float(), union.sum().float())
+            print(TP, FP, FN, TN)
+
+            iou = TP / (TP + FP + FN)
+            acc = (TP + TN)/(TP + TN + FP + FN)
+            pre = TP/(TP + FP)
+            rec = TP/(TP + FN)
+            print(iou, acc, pre, rec)
+
 
 #                print(pred_mask.sum(), (masks == 1).sum())
 #                print(union.size(), int.size())
 #                print(union.sum().item(), int.sum().item(), iou.item())
 
-                iou_sum_meter.update(iou.item(), feature.size(0))
+            iou_sum_meter.update(iou, feature.size(0))
+            acc_sum_meter.update(acc, feature.size(0))
+            pre_sum_meter.update(pre, feature.size(0))
+            rec_sum_meter.update(rec, feature.size(0))
         
         # Output the best IoU if histogram is not required
-        writer.add_scalar('traversability_mask/test/best_iou', iou.item(), writer_idx)
+        writer.add_scalar('traversability_mask/test/IoU', iou_sum_meter.avg, writer_idx)
+        writer.add_scalar('traversability_mask/test/Accuracy', acc_sum_meter.avg, writer_idx)
+        writer.add_scalar('traversability_mask/test/Precision', pre_sum_meter.avg, writer_idx)
+        writer.add_scalar('traversability_mask/test/Recall', rec_sum_meter.avg, writer_idx)
 
         # Visualize the mask that achieves the best IoU
         if visualize:
