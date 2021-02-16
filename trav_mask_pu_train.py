@@ -247,7 +247,7 @@ def main():
         c = ret_dict["c"]
         loss = ret_dict["loss"]
 
-        extra_info_ckpt = '{}_c_{}'.format(args.model, c)
+        extra_info_ckpt = '{}_epoch_{}_c_{}'.format(args.model, epoch, c)
         weights_dict = prob_model.state_dict()
         if loss < loss_old:
             print("Save weights")
