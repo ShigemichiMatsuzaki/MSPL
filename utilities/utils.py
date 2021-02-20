@@ -308,3 +308,63 @@ def import_os_model(args, os_model, os_weights, os_seg_classes):
         model_outsource = unet_seg(num_classes=os_seg_classes, weights=os_weights)
 
     return model_outsource
+
+def get_metrics(masks, pred, thresh=0.5):
+    ''' Get IoU, Accuracy, Precision, and Recall of the prediction with a given threshold
+    :param masks:  Tensor of ground truth label maps
+    :param pred:   Tensor of predicted probability maps
+    :param thresh: Threshold to define positive and negative of the prediction
+    '''
+
+    #
+    # Convert the probability maps to binary masks with the given threshold,
+    #  and the ground trute masks (0 or 1) to binary masks (True of False)
+    #
+    pred_mask = pred > thresh
+    gt_mask = (masks == 1)
+
+    #
+    # Calculate true positive, true negative, false positive, and false negative
+    #
+    # Union (OR) of the prediction and true labels
+    union = pred_mask | gt_mask
+    # TP: Region that both prediction and GT is true
+    # FP: Region that prediction is true but GT is false
+    # FN: Region that prediction is false but GT is true
+    # TN: Region that both prediction and GT are false
+    TP = (pred_mask & gt_mask).sum().item()
+    FP = pred_mask.sum().item() - TP
+    FN = gt_mask.sum().item() - TP
+    TN = (~union).sum().item()
+
+    #
+    # Calculate the metrics
+    #
+    if TP + FP + FN:
+        iou = TP / (TP + FP + FN)
+    else:
+        iou = 0.0
+    acc = (TP + TN)/(TP + TN + FP + FN)
+    if TP + FP:
+        pre = TP/(TP + FP)
+    else:
+        pre = 0.0
+
+    if TP + FN:
+        rec = TP/(TP + FN)
+    else:
+        rec = 0.0
+
+    return {"iou": iou, "acc": acc, "pre": pre, "rec": rec}
+    
+#    pred_mask = torch.zeros_like(pred)
+#    pred_mask[pred_mask > thresh]
+#    TP = ((gt == 1)&(pred==1)).sum().item()
+#    FN = ((gt == 1)).sum().item() - TP
+#    FP = ((pred==1)).sum().item() - TP
+#
+#    acc = (TP + TN) / torch.numel(gt)
+#    pre = TP / (TP + FP)
+#    rec = TP / (TP + FN)
+#
+#    return acc, pre, rec
