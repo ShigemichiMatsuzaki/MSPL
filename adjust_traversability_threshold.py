@@ -22,7 +22,7 @@ parser.add_argument('--freeze-bn', action='store_true', default=False, help='Fre
 # dataset and result directories
 parser.add_argument('--dataset', type=str, default='greenhouse', choices=segmentation_datasets, help='Datasets')
 parser.add_argument('--weights', type=str, default='./espdnetue_ssm.pth', help='Name of weight file to load')
-parser.add_argument('--data-test-list', type=str, default='./vision_datasets/traversability_mask/greenhouse_a_test_new.lst',
+parser.add_argument('--data-test-list', type=str, default='./vision_datasets/traversability_mask/greenhouse_a_test.lst',
                     help='Location to save the results')
 parser.add_argument('--trav-module-weights', default='./espdnetue_tem.pth', 
                     type=str, help='Weight file of traversability module')
@@ -75,6 +75,11 @@ class App(Frame):
         self.button2 = Button(self.frame2, text='Next')
         self.button2.grid(row=0, column=2)
         self.button2.bind("<Button-1>", self.show_next_image)
+
+        # Button to display the next image
+        self.button3 = Button(self.frame2, text='Save image')
+        self.button3.grid(row=0, column=3)
+        self.button3.bind("<Button-1>", self.save_image)
 
         self.update_current_images()
 
@@ -153,6 +158,9 @@ class App(Frame):
 
         image_width = binary_pil.size[0]
         self.display.create_image(image_width * 2 + 20, 0, anchor='nw', image=self.tk_binary, tags="IMG3")
+    
+    def save_image(self, *args):
+        self.current_prob_pil.save('prob_img.png')
 
 # Main
 def main():
