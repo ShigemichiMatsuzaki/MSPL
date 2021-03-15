@@ -9,14 +9,14 @@ import math
 
 
 class SegmentationLoss(nn.Module):
-    def __init__(self, n_classes=21, loss_type='ce', device='cuda', ignore_idx=255, class_wts=None):
+    def __init__(self, n_classes=21, loss_type='ce', device='cuda', ignore_idx=255, class_weights=None):
         super(SegmentationLoss, self).__init__()
         self.loss_type = loss_type
         self.n_classes = n_classes
         self.device = device
         self.ignore_idx = ignore_idx
         self.smooth = 1e-6
-        self.class_wts = class_wts
+        self.class_wts = class_weights
 
         if self.loss_type == 'bce':
             self.loss_fn = nn.BCEWithLogitsLoss(weight=self.class_wts)
@@ -144,10 +144,10 @@ class SoftArgMax(nn.Module):
         return self.soft_arg_max(x)
 
 class UncertaintyWeightedSegmentationLoss(nn.Module):
-    def __init__(self, num_classes, class_weights=None, ignore_idx=None):
+    def __init__(self, num_classes, class_weights=None, ignore_idx=None, device='cuda'):
         super(UncertaintyWeightedSegmentationLoss, self).__init__()
         self.num_classes = num_classes
-        self.class_weights = class_weights if class_weights is not None else torch.ones(self.num_classes)
+        self.class_weights = class_weights if class_weights is not None else torch.ones(self.num_classes).to(device)
         self.ignore_idx = ignore_idx
         if self.ignore_idx is not None:
             self.class_weights[self.ignore_idx] = 0.0
@@ -167,7 +167,7 @@ class UncertaintyWeightedSegmentationLoss(nn.Module):
         # Gather log probabilities with respect to target
         logp = logp.gather(1, target.view(batch_size, 1, H, W))
 
-        # Multiply with we-ights
+        # Multiply with weights
         logp = logp * torch.exp(-u_weight.reshape(batch_size, 1, H, W))
 
         # Rescale so that loss is in approx. same interval
@@ -187,3 +187,28 @@ class PixelwiseKLD(nn.Module):
         kld_i = p1 * logp1 - p1 * logp2
 
         return torch.sum(kld_i, dim=1)
+
+class SelectiveBCE(nn.Module):
+    def __init__(self, with_logits=True, device='cuda'):
+        super(SelectiveBCE, self).__init__()
+        if with_logits:
+            self.loss_func = nn.BCEWithLogitsLoss(reduction='none').to(device)
+        else:
+            self.loss_func = nn.BCELoss(reduction='none').to(device)
+
+    def forward(self, input, target, bool_index_mask=None):
+        '''
+        :param input: Input (Tensor of size (B, 1, H, W))
+        :param target: Target label (Tensor)
+        :param mask: Mask indicating pixels to be used in loss calculation (Tensor)
+        :return: loss value
+        '''
+
+        # Get non-reduced loss values
+        loss = self.loss_func(input, torch.reshape(target, input.size()).float())
+
+        if bool_index_mask is not None:
+            # Extract the values of pixels whose mask is 1
+            loss = loss[bool_index_mask]
+
+        return loss.mean()

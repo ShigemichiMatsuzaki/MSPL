@@ -13,16 +13,19 @@ from nn_layers.fusion_gate import FusionGate
 from model.classification.espnetv2 import EESPNet
 from utilities.print_utils import *
 from torch.nn import functional as F
+from model.classification.label_prob_estimator import LabelProbEstimator
+import os
 import copy
 
-class ESPDNetwithUncertaintyEstimation(nn.Module):
+class ESPDNetUEwithTraversability(nn.Module):
     '''
     This class defines the ESPDNet architecture for the Semantic Segmenation with uncertainty estimation
 
     aux_layer : A number of the layer from which the auxiliary branch is made.
       0: bu_dec_l1, 1: bu_dec_l2, 2: bu_dec_l3
     '''
-    def __init__(self, args, classes=21, dataset='pascal', dense_fuse=False, trainable_fusion=True, aux_layer=2, fix_pyr_plane_proj=False):
+    def __init__(self, args, classes=21, dataset='pascal', dense_fuse=False, trainable_fusion=True,
+                 aux_layer=2, fix_pyr_plane_proj=False, in_channels=32, spatial=True):
         super().__init__()
 
         # =============================================================
@@ -106,6 +109,22 @@ class ESPDNetwithUncertaintyEstimation(nn.Module):
         self.init_params()
         self.dense_fuse = dense_fuse
 
+        #
+        # Traversability module
+        #
+        self.trav_module = LabelProbEstimator(in_channels=in_channels, spatial=spatial)
+
+        # Register 
+        self.activation = {}
+        def get_activation(name):
+            def hook(model, input, output):
+                self.activation[name] = output.detach()
+
+            return hook
+
+        self.bu_dec_l4.merge_layer[2].register_forward_hook(get_activation('output_main'))
+        self.aux_decoder.merge_layer[2].register_forward_hook(get_activation('output_aux'))
+
     def upsample(self, x):
         return F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
 
@@ -175,7 +194,6 @@ class ESPDNetwithUncertaintyEstimation(nn.Module):
 
         if x_d is not None:
             pass
-#            print(x.size(), x_d.size())
 
         x_size = (x.size(2), x.size(3)) # Width and height
 
@@ -298,10 +316,26 @@ class ESPDNetwithUncertaintyEstimation(nn.Module):
         bu_out = self.bu_br_l4(bu_out)
         bu_out  = self.bu_dec_l4(bu_out)
 
-        return (F.interpolate(bu_out, size=x_size, mode='bilinear', align_corners=True), 
-                F.interpolate(aux_out, size=x_size, mode='bilinear', align_corners=True))
+        #
+        # Traversability module
+        #
 
-def espdnetue_seg2(args, load_entire_weights=False, fix_pyr_plane_proj=False):
+        main_feature = F.interpolate(self.activation['output_main'], size=x_size, mode='bilinear')
+        aux_feature = F.interpolate(self.activation['output_aux'], size=x_size, mode='bilinear')
+
+        feature = torch.cat((main_feature, aux_feature), dim=1)
+
+        prob_output = self.trav_module(feature)
+
+        # Return the outputs as a tuple
+        return (F.interpolate(bu_out, size=x_size, mode='bilinear', align_corners=True), 
+                F.interpolate(aux_out, size=x_size, mode='bilinear', align_corners=True),
+                prob_output)
+
+def espdnetue_seg(args, load_entire_weights=False, fix_pyr_plane_proj=False, spatial=True):
+    num_gpus = torch.cuda.device_count()
+    device = 'cuda' if num_gpus >= 1 else 'cpu'
+
     classes = args.classes
 #    scale=args.s
     weights = args.weights
@@ -311,13 +345,12 @@ def espdnetue_seg2(args, load_entire_weights=False, fix_pyr_plane_proj=False):
     dataset=args.dataset
     trainable_fusion=args.trainable_fusion
     dense_fuse=args.dense_fuse
-    model = ESPDNetwithUncertaintyEstimation(args, classes=classes, dataset=dataset, dense_fuse=dense_fuse,
-                                             trainable_fusion=trainable_fusion, fix_pyr_plane_proj=fix_pyr_plane_proj)
+    trav_module_weights = args.trav_module_weights
+    model = ESPDNetUEwithTraversability(args, classes=classes, dataset=dataset, dense_fuse=dense_fuse,
+                                        trainable_fusion=trainable_fusion, fix_pyr_plane_proj=fix_pyr_plane_proj,
+                                        spatial=spatial)
     if weights:
-        import os
         if os.path.isfile(weights):
-            num_gpus = torch.cuda.device_count()
-            device = 'cuda' if num_gpus >= 1 else 'cpu'
             pretrained_dict = torch.load(weights, map_location=torch.device(device))
         else:
             print_error_message('Weight file does not exist at {}. Please check. Exiting!!'.format(weights))
@@ -359,10 +392,7 @@ def espdnetue_seg2(args, load_entire_weights=False, fix_pyr_plane_proj=False):
         print_warning_message('Training from scratch!!')
 
     if depth_weights:
-        import os
         if os.path.isfile(depth_weights):
-            num_gpus = torch.cuda.device_count()
-            device = 'cuda' if num_gpus >= 1 else 'cpu'
             pretrained_dict = torch.load(depth_weights, map_location=torch.device(device))
         else:
             print_error_message('Weight file does not exist at {}. Please check. Exiting!!'.format(depth_weights))
@@ -378,77 +408,11 @@ def espdnetue_seg2(args, load_entire_weights=False, fix_pyr_plane_proj=False):
         dbasenet_dict.update(overlap_dict)
         model.depth_base_net.load_state_dict(dbasenet_dict)
         print_info_message('Pretrained depth basenet model loaded!!')
-
-    return model
-
-def espdnetue_seg(args, load_entire_weights=False):
-    classes = args.classes
-    scale=args.s
-    weights = args.weights
-    print(weights)
-    #depth_weights = 'results_segmentation/model_espnetv2_greenhouse/s_2.0_sch_hybrid_loss_ce_res_480_sc_0.5_2.0_autoenc/20200401-114045/espnetv2_2.0_480_checkpoint.pth.tar'
-    depth_weights = weights
-    dataset=args.dataset
-    trainable_fusion=args.trainable_fusion
-    dense_fuse=args.dense_fuse
-    model = ESPDNetwithUncertaintyEstimation(args, classes=classes, dataset=dataset, dense_fuse=dense_fuse, trainable_fusion=trainable_fusion)
-    if weights:
-        import os
-        if os.path.isfile(weights):
-            num_gpus = torch.cuda.device_count()
-            device = 'cuda' if num_gpus >= 1 else 'cpu'
-            pretrained_dict = torch.load(weights, map_location=torch.device(device))
-        else:
-            print_error_message('Weight file does not exist at {}. Please check. Exiting!!'.format(weights))
-            exit()
-
-        print_info_message('Loading pretrained basenet model weights')
-        # Load pretrained weights for RGB
-        model_dict = model.state_dict()
-        if load_entire_weights:
-            overlap_dict = {k: v for k, v in pretrained_dict.items() 
-                            if k in model_dict}
-        else:
-            basenet_dict = model.base_net.state_dict()
-            overlap_dict = {k.replace("base_net.", ""): v for k, v in pretrained_dict.items() 
-                            if k.replace("base_net.", "") in basenet_dict}
-
-        if len(overlap_dict) == 0:
-            print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
-            exit()
-
-        print_info_message('{:.2f} % of weights copied from basenet to segnet'.format(len(overlap_dict) * 1.0/len(model_dict) * 100))
-        if load_entire_weights:
-            model_dict.update(overlap_dict)
-            model.load_state_dict(model_dict)
-        else:
-            basenet_dict.update(overlap_dict)
-            model.base_net.load_state_dict(basenet_dict)
-
-        print_info_message('Pretrained basenet model loaded!!')
-    else:
-        print_warning_message('Training from scratch!!')
-
-    if depth_weights:
-        import os
-        if os.path.isfile(depth_weights):
-            num_gpus = torch.cuda.device_count()
-            device = 'cuda' if num_gpus >= 1 else 'cpu'
-            pretrained_dict = torch.load(depth_weights, map_location=torch.device(device))
-        else:
-            print_error_message('Weight file does not exist at {}. Please check. Exiting!!'.format(depth_weights))
-            exit()
-
-        # Load pretrained weights for RGB
-        dbasenet_dict = model.depth_base_net.state_dict()
-        overlap_dict = {k.lstrip('base_net.'): v for k, v in pretrained_dict.items() if k.lstrip('base_net.') in dbasenet_dict}
-        overlap_dict['level1.conv.weight'] = torch.mean(overlap_dict['level1.conv.weight'], dim=1, keepdim=True)
-        if len(overlap_dict) == 0:
-            print_error_message('No overlaping weights between model file and pretrained weight file. Please check')
-            exit()
-        dbasenet_dict.update(overlap_dict)
-        model.depth_base_net.load_state_dict(dbasenet_dict)
-        print_info_message('Pretrained depth basenet model loaded!!')
+    
+    #
+    # Traversability module
+    #
+    model.trav_module.load_state_dict(torch.load(trav_module_weights))
 
     return model
 
